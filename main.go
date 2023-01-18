@@ -98,6 +98,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// temp fix
 	logger := logrus.StandardLogger()
 	bd, err := store.NewPackageDatabase(path.Join("/Users/vnarsing/go/src/github.com/operator-framework/olmv1/olmcli", "olm.db"), logger)
 	if err != nil {
@@ -106,6 +107,9 @@ func main() {
 	}
 
 	installer, err := olmcliManager.NewPackageInstaller(resolution.NewOLMSolver(bd, logger), logger)
+	if err != nil {
+		os.Exit(1)
+	}
 
 	if err = (&controllers.OperatorReconciler{
 		Client:           mgr.GetClient(),
