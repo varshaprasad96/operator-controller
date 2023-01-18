@@ -19,11 +19,16 @@ package main
 import (
 	"flag"
 	"os"
+	"path"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	olmcliManager "github.com/perdasilva/olmcli/manager"
+	"github.com/perdasilva/olmcli/resolution"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/perdasilva/olmcli/store"
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -33,6 +38,7 @@ import (
 
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/controllers"
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -45,6 +51,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(operatorsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(rukpakv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -52,11 +59,13 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var dbConfigPath string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&dbConfigPath, "db-config-path", "", "config path to the database")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -89,9 +98,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger := logrus.StandardLogger()
+	bd, err := store.NewPackageDatabase(path.Join("/Users/vnarsing/go/src/github.com/operator-framework/olmv1/olmcli", "olm.db"), logger)
+	if err != nil {
+		setupLog.Error(err, "unable to create backing boltdb store")
+		os.Exit(1)
+	}
+
+	installer, err := olmcliManager.NewPackageInstaller(resolution.NewOLMSolver(bd, logger), logger)
+
 	if err = (&controllers.OperatorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		PackageInstaller: installer,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Operator")
 		os.Exit(1)
