@@ -22,7 +22,10 @@ import (
 
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,6 +46,9 @@ type OperatorReconciler struct {
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -58,10 +64,37 @@ func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	l.V(1).Info("starting")
 	defer l.V(1).Info("ending")
 
-	var existingOp = &operatorsv1alpha1.Operator{}
-	if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	existingOp := &operatorsv1alpha1.Operator{}
+	err := r.Get(ctx, req.NamespacedName, existingOp)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// If the custom resource is not found then, it usually means that it was deleted or not created
+			// In this way, we will stop the reconciliation
+			l.Info("operator resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		l.Error(err, "Failed to get memcached")
+		return ctrl.Result{}, err
 	}
+
+	// Setting the status on operator object before reconciling.
+	if existingOp.Status.Conditions == nil || len(existingOp.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&existingOp.Status.Conditions, metav1.Condition{Type: operatorsv1alpha1.TypeReady, Status: metav1.ConditionUnknown, Reason: "Reconciling", Message: "Starting reconciliation, installation in progress"})
+		if err = r.Status().Update(ctx, existingOp); err != nil {
+			l.Error(err, "Failed to update Operator status while reconciling")
+			return ctrl.Result{}, err
+		}
+
+		// Re-fetching the object with updated status.
+		if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
+			l.Error(err, "Failed to re-fetch memcached")
+			return ctrl.Result{}, err
+		}
+	}
+
+	// TODO(varsha): add the code to check if bundledeployment exists, if not then send it for resolution to deppy.
+	// ref: https://github.com/operator-framework/operator-controller/tree/prototype
 
 	reconciledOp := existingOp.DeepCopy()
 	res, reconcileErr := r.reconcile(ctx, reconciledOp)
@@ -152,6 +185,7 @@ func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&operatorsv1alpha1.Operator{}).
+		Owns(&rukpakv1alpha1.BundleDeployment{}).
 		Complete(r)
 
 	if err != nil {
