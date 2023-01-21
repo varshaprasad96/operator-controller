@@ -31,6 +31,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 )
 
 // OperatorReconciler reconciles a Operator object
@@ -149,6 +151,35 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		}
 
 		// Create bundleDeployment
+
+		bd := &rukpakv1alpha1.BundleDeployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: operator.GetName(),
+			},
+			Spec: rukpakv1alpha1.BundleDeploymentSpec{
+				ProvisionerClassName: "core-rukpak-io-plain",
+				Template: &rukpakv1alpha1.BundleTemplate{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"app": "my-bundle",
+						},
+					},
+					Spec: rukpakv1alpha1.BundleSpec{
+						Source: rukpakv1alpha1.BundleSource{
+							Type: rukpakv1alpha1.SourceTypeImage,
+							Image: &rukpakv1alpha1.ImageSource{
+								Ref: operator.Status.BundlePath,
+							},
+						},
+						ProvisionerClassName: "core-rukpak-io-plain",
+					},
+				},
+			},
+		}
+		err := r.Client.Create(ctx, bd)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{}, nil

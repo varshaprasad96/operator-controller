@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -32,7 +33,10 @@ import (
 
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/controllers"
+
 	//+kubebuilder:scaffold:imports
+
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 )
 
 var (
@@ -45,6 +49,8 @@ func init() {
 
 	utilruntime.Must(operatorsv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
+
+	utilruntime.Must(rukpakv1alpha1.AddToScheme(scheme))
 }
 
 func main() {

@@ -8,6 +8,7 @@ require (
 	github.com/onsi/gomega v1.22.1
 	github.com/operator-framework/deppy v0.0.0-20230102161649-36fa82370999
 	github.com/operator-framework/operator-registry v1.26.2
+	github.com/operator-framework/rukpak v0.11.0
 	k8s.io/apimachinery v0.25.0
 	k8s.io/client-go v0.25.0
 	sigs.k8s.io/controller-runtime v0.13.1
