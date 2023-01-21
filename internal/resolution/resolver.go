@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/operator-framework/deppy/pkg/deppy"
 	"github.com/operator-framework/deppy/pkg/deppy/input"
 	"github.com/operator-framework/deppy/pkg/deppy/solver"
 	"github.com/operator-framework/operator-controller/api/v1alpha1"
@@ -35,6 +36,10 @@ func (o *OperatorResolver) Resolve(ctx context.Context) (solver.Solution, error)
 		return nil, err
 	}
 	return solution, nil
+}
+
+func (o *OperatorResolver) GetBundlePath(ctx context.Context, id deppy.Identifier) (string, error) {
+	return variable_sources.NewBundleEntity(o.entitySource.Get(ctx, id)).BundlePath()
 }
 
 func (o *OperatorResolver) getPackageNames(ctx context.Context) ([]string, error) {

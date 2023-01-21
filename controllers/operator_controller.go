@@ -20,6 +20,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/operator-framework/deppy/pkg/deppy"
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -136,11 +137,18 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 			ObservedGeneration: op.GetGeneration(),
 		})
 		if varID, ok := packageVariableIDMap[operator.Spec.PackageName]; ok {
-			operator.Status.BundlePath = varID
+			bundlePath, err := r.resolver.GetBundlePath(ctx, deppy.IdentifierFromString(varID))
+			if err != nil {
+				/// Raise this error in the status of the operator CR
+				return ctrl.Result{}, err
+			}
+			operator.Status.BundlePath = bundlePath
 		}
 		if err := r.Client.Status().Update(ctx, &operator); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		// Create bundleDeployment
 	}
 
 	return ctrl.Result{}, nil
