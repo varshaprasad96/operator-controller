@@ -27,10 +27,12 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 )
@@ -44,6 +46,7 @@ type OperatorReconciler struct {
 }
 
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=bundledeployments,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/finalizers,verbs=update
 
@@ -151,32 +154,52 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		}
 
 		// Create bundleDeployment
-
-		bd := &rukpakv1alpha1.BundleDeployment{
+		// TODO: move this into an ensure method
+		expectedBundleDeployment := &rukpakv1alpha1.BundleDeployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: operator.GetName(),
 			},
 			Spec: rukpakv1alpha1.BundleDeploymentSpec{
+				//TODO: Don't assume plain provisioner
 				ProvisionerClassName: "core-rukpak-io-plain",
 				Template: &rukpakv1alpha1.BundleTemplate{
 					ObjectMeta: metav1.ObjectMeta{
+						// TODO: Remove
 						Labels: map[string]string{
 							"app": "my-bundle",
 						},
 					},
 					Spec: rukpakv1alpha1.BundleSpec{
 						Source: rukpakv1alpha1.BundleSource{
+							// TODO: Don't assume image type
 							Type: rukpakv1alpha1.SourceTypeImage,
 							Image: &rukpakv1alpha1.ImageSource{
 								Ref: operator.Status.BundlePath,
 							},
 						},
+
+						//TODO: Don't assume plain provisioner
 						ProvisionerClassName: "core-rukpak-io-plain",
 					},
 				},
 			},
 		}
-		err := r.Client.Create(ctx, bd)
+		existingBD := &rukpakv1alpha1.BundleDeployment{}
+		err := r.Client.Get(ctx, types.NamespacedName{Name: operator.GetName()}, existingBD)
+		if err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return reconcile.Result{}, err
+			}
+			//
+			err := r.Client.Create(ctx, expectedBundleDeployment)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		// update the expected bundleDeployment
+		existingBD.Spec = expectedBundleDeployment.Spec
+		err = r.Client.Update(ctx, existingBD)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
