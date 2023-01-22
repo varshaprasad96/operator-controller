@@ -203,6 +203,7 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 						// TODO: Don't assume image type
 						Type: rukpakv1alpha1.SourceTypeImage,
 						Image: &rukpakv1alpha1.ImageSource{
+							// TODO: Should consider not reading this from the status of the operator CR.
 							Ref: o.Status.BundlePath,
 						},
 					},
