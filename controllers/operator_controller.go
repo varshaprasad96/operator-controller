@@ -32,7 +32,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 )
@@ -118,12 +117,12 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 	}
 
 	// todo(perdasilva): more hacks - need to fix up the solution structure to be more useful
-	packageVariableIDMap := map[string]string{}
+	packageVariableIDMap := map[string]deppy.Identifier{}
 	if solution != nil {
 		for variableID, ok := range solution {
 			if ok {
 				idComponents := strings.Split(string(variableID), "/")
-				packageVariableIDMap[idComponents[1]] = string(variableID)
+				packageVariableIDMap[idComponents[1]] = variableID
 			}
 		}
 	}
@@ -142,70 +141,78 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 			ObservedGeneration: op.GetGeneration(),
 		})
 		if varID, ok := packageVariableIDMap[operator.Spec.PackageName]; ok {
-			bundlePath, err := r.resolver.GetBundlePath(ctx, deppy.IdentifierFromString(varID))
+			bundlePath, err := r.resolver.GetBundlePath(ctx, varID)
 			if err != nil {
 				/// Raise this error in the status of the operator CR
 				return ctrl.Result{}, err
 			}
 			operator.Status.BundlePath = bundlePath
 		}
+		// TODO: Should we be updating operators CRs that we aren't actively reconciling.
+		// Should we instead create the expected bundleDeployments and then update each of the operator statuses
+		// by triggering the reconciler.
 		if err := r.Client.Status().Update(ctx, &operator); err != nil {
 			return ctrl.Result{}, err
 		}
 
 		// Create bundleDeployment
-		// TODO: move this into an ensure method
-		expectedBundleDeployment := &rukpakv1alpha1.BundleDeployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: operator.GetName(),
-			},
-			Spec: rukpakv1alpha1.BundleDeploymentSpec{
-				//TODO: Don't assume plain provisioner
-				ProvisionerClassName: "core-rukpak-io-plain",
-				Template: &rukpakv1alpha1.BundleTemplate{
-					ObjectMeta: metav1.ObjectMeta{
-						// TODO: Remove
-						Labels: map[string]string{
-							"app": "my-bundle",
-						},
-					},
-					Spec: rukpakv1alpha1.BundleSpec{
-						Source: rukpakv1alpha1.BundleSource{
-							// TODO: Don't assume image type
-							Type: rukpakv1alpha1.SourceTypeImage,
-							Image: &rukpakv1alpha1.ImageSource{
-								Ref: operator.Status.BundlePath,
-							},
-						},
-
-						//TODO: Don't assume plain provisioner
-						ProvisionerClassName: "core-rukpak-io-plain",
-					},
-				},
-			},
-		}
-		existingBD := &rukpakv1alpha1.BundleDeployment{}
-		err := r.Client.Get(ctx, types.NamespacedName{Name: operator.GetName()}, existingBD)
-		if err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				return reconcile.Result{}, err
-			}
-			//
-			err := r.Client.Create(ctx, expectedBundleDeployment)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-
-		// update the expected bundleDeployment
-		existingBD.Spec = expectedBundleDeployment.Spec
-		err = r.Client.Update(ctx, existingBD)
-		if err != nil {
+		if err := r.ensureBundleDeployment(ctx, generateExpectedBundleDeployment(operator)); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *OperatorReconciler) ensureBundleDeployment(ctx context.Context, desiredBundleDeployment *rukpakv1alpha1.BundleDeployment) error {
+	existingBundleDeployment := &rukpakv1alpha1.BundleDeployment{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: desiredBundleDeployment.GetName()}, existingBundleDeployment)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		return r.Client.Create(ctx, desiredBundleDeployment)
+	}
+
+	// Check if the existing bundleDeployment's spec needs to be updated
+	if equality.Semantic.DeepEqual(existingBundleDeployment.Spec, desiredBundleDeployment.Spec) {
+		return nil
+	}
+
+	existingBundleDeployment.Spec = desiredBundleDeployment.Spec
+	return r.Client.Update(ctx, existingBundleDeployment)
+}
+
+func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alpha1.BundleDeployment {
+	return &rukpakv1alpha1.BundleDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: o.GetName(),
+		},
+		Spec: rukpakv1alpha1.BundleDeploymentSpec{
+			//TODO: Don't assume plain provisioner
+			ProvisionerClassName: "core-rukpak-io-plain",
+			Template: &rukpakv1alpha1.BundleTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					// TODO: Remove
+					Labels: map[string]string{
+						"app": "my-bundle",
+					},
+				},
+				Spec: rukpakv1alpha1.BundleSpec{
+					Source: rukpakv1alpha1.BundleSource{
+						// TODO: Don't assume image type
+						Type: rukpakv1alpha1.SourceTypeImage,
+						Image: &rukpakv1alpha1.ImageSource{
+							Ref: o.Status.BundlePath,
+						},
+					},
+
+					//TODO: Don't assume plain provisioner
+					ProvisionerClassName: "core-rukpak-io-plain",
+				},
+			},
+		},
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
