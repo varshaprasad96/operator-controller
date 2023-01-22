@@ -219,12 +219,7 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.resolver = resolution.NewOperatorResolver(mgr.GetClient(), resolution.HardcodedEntitySource)
 
-	err := ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&operatorsv1alpha1.Operator{}).
 		Complete(r)
-
-	if err != nil {
-		return err
-	}
-	return nil
 }
