@@ -208,8 +208,8 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 						},
 					},
 
-					//TODO: Don't assume plain provisioner
-					ProvisionerClassName: "core-rukpak-io-plain",
+					//TODO: Don't assume registry provisioner
+					ProvisionerClassName: "core-rukpak-io-registry",
 				},
 			},
 		},
