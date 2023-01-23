@@ -95,7 +95,8 @@ build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager main.go
 
 .PHONY: run
-run: docker-build kind-cluster kind-load install deploy wait ## Build the operator-controller then deploy it into a new kind cluster.
+run: manifests generate fmt vet ## Run a controller from your host.
+ 	go run ./main.go 
 
 .PHONY: wait
 wait:

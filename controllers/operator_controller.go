@@ -24,6 +24,8 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,9 +47,11 @@ type OperatorReconciler struct {
 }
 
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core.rukpak.io,resources=bundledeployments,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -64,8 +68,32 @@ func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	defer l.V(1).Info("ending")
 
 	var existingOp = &operatorsv1alpha1.Operator{}
-	if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	err := r.Get(ctx, req.NamespacedName, existingOp)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// If the custom resource is not found then, it usually means that it was deleted or not created
+			// In this way, we will stop the reconciliation
+			l.Info("operator resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		l.Error(err, "Failed to get operator object")
+		return ctrl.Result{}, err
+	}
+
+	// Setting the status on operator object before reconciling.
+	if existingOp.Status.Conditions == nil || len(existingOp.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&existingOp.Status.Conditions, metav1.Condition{Type: operatorsv1alpha1.TypeReady, Status: metav1.ConditionUnknown, Reason: "Reconciling", Message: "Starting reconciliation, installation in progress"})
+		if err := r.Status().Update(ctx, existingOp); err != nil {
+			l.Error(err, "Failed to update Operator status while reconciling")
+			return ctrl.Result{}, err
+		}
+
+		// Re-fetching the object with updated status.
+		if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
+			l.Error(err, "Failed to re-fetch memcached")
+			return ctrl.Result{}, err
+		}
 	}
 
 	reconciledOp := existingOp.DeepCopy()
@@ -118,12 +146,11 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 
 	// todo(perdasilva): more hacks - need to fix up the solution structure to be more useful
 	packageVariableIDMap := map[string]deppy.Identifier{}
-	if solution != nil {
-		for variableID, ok := range solution {
-			if ok {
-				idComponents := strings.Split(string(variableID), "/")
-				packageVariableIDMap[idComponents[1]] = variableID
-			}
+
+	for variableID, ok := range solution {
+		if ok {
+			idComponents := strings.Split(string(variableID), "/")
+			packageVariableIDMap[idComponents[1]] = variableID
 		}
 	}
 
@@ -132,19 +159,17 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		return ctrl.Result{}, err
 	}
 
+	var bundlePath string
+
+	// Bundle the errors. We may not want to reconcile when there is an error in updating
+	// each object.
+	var errs []error
 	for _, operator := range operatorList.Items {
-		apimeta.SetStatusCondition(&operator.Status.Conditions, metav1.Condition{
-			Type:               operatorsv1alpha1.TypeReady,
-			Status:             status,
-			Reason:             reason,
-			Message:            message,
-			ObservedGeneration: op.GetGeneration(),
-		})
 		if varID, ok := packageVariableIDMap[operator.Spec.PackageName]; ok {
-			bundlePath, err := r.resolver.GetBundlePath(ctx, varID)
+			bundlePath, err = r.resolver.GetBundlePath(ctx, varID)
 			if err != nil {
 				/// Raise this error in the status of the operator CR
-				return ctrl.Result{}, err
+				errs = append(errs, err)
 			}
 			operator.Status.BundlePath = bundlePath
 		}
@@ -152,16 +177,32 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		// Should we instead create the expected bundleDeployments and then update each of the operator statuses
 		// by triggering the reconciler.
 		if err := r.Client.Status().Update(ctx, &operator); err != nil {
-			return ctrl.Result{}, err
+			errs = append(errs, err)
 		}
 
 		// Create bundleDeployment
-		if err := r.ensureBundleDeployment(ctx, generateExpectedBundleDeployment(operator)); err != nil {
-			return ctrl.Result{}, err
+		dep, err := r.generateExpectedBundleDeployment(&operator, bundlePath)
+		if err != nil {
+			errs = append(errs, err)
 		}
+		if err := r.ensureBundleDeployment(ctx, dep); err != nil {
+			errs = append(errs, err)
+		}
+
+		// TODO: If not resurface the error that the reconcilation was unsuccessful when we use the existing registry implemenatation.
+		if len(errs) == 0 {
+			apimeta.SetStatusCondition(&operator.Status.Conditions, metav1.Condition{
+				Type:               operatorsv1alpha1.TypeReady,
+				Status:             status,
+				Reason:             reason,
+				Message:            message,
+				ObservedGeneration: op.GetGeneration(),
+			})
+		}
+
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, utilerrors.NewAggregate(errs)
 }
 
 func (r *OperatorReconciler) ensureBundleDeployment(ctx context.Context, desiredBundleDeployment *rukpakv1alpha1.BundleDeployment) error {
@@ -183,8 +224,9 @@ func (r *OperatorReconciler) ensureBundleDeployment(ctx context.Context, desired
 	return r.Client.Update(ctx, existingBundleDeployment)
 }
 
-func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alpha1.BundleDeployment {
-	return &rukpakv1alpha1.BundleDeployment{
+func (r *OperatorReconciler) generateExpectedBundleDeployment(o *operatorsv1alpha1.Operator, bundlePath string) (*rukpakv1alpha1.BundleDeployment, error) {
+	dep := &rukpakv1alpha1.BundleDeployment{
+		// TODO: add the olm annotations. These can be fetched from deppy's resolver.
 		ObjectMeta: metav1.ObjectMeta{
 			Name: o.GetName(),
 		},
@@ -203,8 +245,8 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 						// TODO: Don't assume image type
 						Type: rukpakv1alpha1.SourceTypeImage,
 						Image: &rukpakv1alpha1.ImageSource{
-							// TODO: Should consider not reading this from the status of the operator CR.
-							Ref: o.Status.BundlePath,
+							// It's safer to read the bundlepath from the solution, than the status of the CR.
+							Ref: bundlePath,
 						},
 					},
 
@@ -214,6 +256,15 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 			},
 		},
 	}
+
+	// Its a happy case for now where one bundleDeployment is owned by one operator object.
+	// If there are multiple operator owners to single bundleDeployment, then use annotations or
+	// OwnerReferences instead of controllerReference. Use finalizer to delete bundle deployment
+	// before cleaning up the operator object.
+	if err := ctrl.SetControllerReference(o, dep, r.Scheme); err != nil {
+		return nil, err
+	}
+	return dep, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -222,5 +273,6 @@ func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&operatorsv1alpha1.Operator{}).
+		Owns(&rukpakv1alpha1.BundleDeployment{}).
 		Complete(r)
 }

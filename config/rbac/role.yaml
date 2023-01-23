@@ -8,13 +8,29 @@ rules:
 - apiGroups:
   - core.rukpak.io
   resources:
-  - bundledeployments
+  - deployments
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - core.rukpak.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - core.rukpak.io
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - operators.operatorframework.io
