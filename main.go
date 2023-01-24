@@ -17,19 +17,26 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	"k8s.io/client-go/dynamic"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/operator-framework/api/pkg/operators/v1alpha1"
+	"github.com/operator-framework/deppy/pkg/deppy/input/catalogsource"
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/controllers"
 	//+kubebuilder:scaffold:imports
@@ -96,6 +103,27 @@ func main() {
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
+
+	cli, err := dynamic.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "error creating restcli")
+		os.Exit(1)
+	}
+
+	watch, err := cli.Resource(schema.GroupVersionResource{
+		Group:    v1alpha1.GroupName,
+		Version:  v1alpha1.GroupVersion,
+		Resource: "catalogsources",
+	}).Watch(context.TODO(), v1.ListOptions{})
+	if err != nil {
+		setupLog.Error(err, "error listing catsrc")
+		os.Exit(1)
+	}
+
+	cacheCli := catalogsource.NewCachedRegistryQuerier(watch, mgr.GetClient(), catalogsource.NewRegistryGRPCClient(0, mgr.GetClient()), &setupLog)
+
+	cacheCli.StartCache(context.TODO())
+	setupLog.Info("setting up catsrc cache")
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

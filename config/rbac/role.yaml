@@ -6,6 +6,32 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - operators.coreos.com
+  resources:
+  - catalogsources
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - operators.coreos.com
+  resources:
+  - catalogsources/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - operators.coreos.com
+  resources:
+  - catalogsources/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - operators.operatorframework.io
   resources:
   - operators
