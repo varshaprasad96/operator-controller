@@ -20,16 +20,21 @@ import (
 	"context"
 	"strings"
 
+	"github.com/operator-framework/api/pkg/operators/v1alpha1"
+	"github.com/operator-framework/deppy/pkg/deppy/input/catalogsource"
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 // OperatorReconciler reconciles a Operator object
@@ -148,9 +153,25 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.resolver = resolution.NewOperatorResolver(mgr.GetClient(), resolution.HardcodedEntitySource)
+	cli, err := dynamic.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		return err
+	}
 
-	err := ctrl.NewControllerManagedBy(mgr).
+	watch, err := cli.Resource(schema.GroupVersionResource{
+		Group:    v1alpha1.GroupName,
+		Version:  v1alpha1.GroupVersion,
+		Resource: "catalogsources",
+	}).Watch(context.TODO(), metav1.ListOptions{})
+
+	mgrLogger := zap.New()
+
+	cacheCli := catalogsource.NewCachedRegistryQuerier(watch, mgr.GetClient(), catalogsource.NewRegistryGRPCClient(0, mgr.GetClient()), &mgrLogger)
+
+	cacheCli.StartCache(context.TODO())
+	r.resolver = resolution.NewOperatorResolver(mgr.GetClient(), cacheCli)
+
+	err = ctrl.NewControllerManagedBy(mgr).
 		For(&operatorsv1alpha1.Operator{}).
 		Complete(r)
 

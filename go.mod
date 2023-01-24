@@ -6,6 +6,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/onsi/ginkgo/v2 v2.3.1
 	github.com/onsi/gomega v1.22.1
+	github.com/operator-framework/api v0.17.2
 	github.com/operator-framework/deppy v0.0.0-20230102161649-36fa82370999
 	github.com/operator-framework/operator-registry v1.26.2
 	k8s.io/apimachinery v0.25.0
@@ -58,6 +59,7 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.32.1 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
+	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
@@ -87,3 +89,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
+
+replace github.com/operator-framework/deppy => github.com/ankitathomas/deppy v0.0.0-20230124171828-8c40a441b0ff
