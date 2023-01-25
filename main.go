@@ -125,6 +125,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start catalogsrc cache in a spearate go routine so that it is not blocking the manager.
+	// Hack: A new client has to be created instead of using the manager's client. Because the manager uses
+	// a split client that is backed by a cache, it needs to be started to have indexes registered for the
+	// client to be able to list resources.
+	// Having a separate controller, that feeds in events to the operator controller when there is
+	// a catalogsrc which is being used to fetch bundles would be a helpful pattern.
 	setupLog.Info("starting manager")
 	cl, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
 	if err != nil {
@@ -133,7 +139,10 @@ func main() {
 
 	cacheCli := catalogsource.NewCachedRegistryQuerier(watch, cl, catalogsource.NewRegistryGRPCClient(0, cl), &setupLog)
 	setupLog.Info("Starting cache")
-	go cacheCli.StartCache(context.TODO())
+
+	go func() {
+		cacheCli.StartCache(context.TODO())
+	}()
 
 	if err = (&controllers.OperatorReconciler{
 		Client:   mgr.GetClient(),

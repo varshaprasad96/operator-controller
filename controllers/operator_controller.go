@@ -25,6 +25,8 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,14 +67,34 @@ type OperatorReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.13.1/pkg/reconcile
 func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	fmt.Println("reconciling...")
 	l := log.FromContext(ctx).WithName("reconcile")
-	l.V(1).Info("starting")
-	defer l.V(1).Info("ending")
 
 	var existingOp = &operatorsv1alpha1.Operator{}
 	if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			// If the custom resource is not found then, it usually means that it was deleted or not created
+			// In this way, we will stop the reconciliation
+			l.Info("operator resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		l.Error(err, "Failed to get operator object")
+		return ctrl.Result{}, err
+	}
+
+	// set the status to reconciling
+	if existingOp.Status.Conditions == nil || len(existingOp.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&existingOp.Status.Conditions, metav1.Condition{Type: operatorsv1alpha1.TypeReady, Status: metav1.ConditionUnknown, Reason: "Reconciling", Message: "Starting reconciliation, installation in progress"})
+		if err := r.Status().Update(ctx, existingOp); err != nil {
+			l.Error(err, "Failed to update Operator status while reconciling")
+			return ctrl.Result{}, err
+		}
+
+		// Re-fetching the object with updated status.
+		if err := r.Get(ctx, req.NamespacedName, existingOp); err != nil {
+			l.Error(err, "Failed to re-fetch  operator")
+			return ctrl.Result{}, err
+		}
 	}
 
 	reconciledOp := existingOp.DeepCopy()
@@ -82,6 +104,12 @@ func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	updateStatus := !equality.Semantic.DeepEqual(existingOp.Status, reconciledOp.Status)
 	updateFinalizers := !equality.Semantic.DeepEqual(existingOp.Finalizers, reconciledOp.Finalizers)
 	unexpectedFieldsChanged := checkForUnexpectedFieldChange(*existingOp, *reconciledOp)
+
+	// Re-fetch the operator object before changing the status
+	if err := r.Get(ctx, req.NamespacedName, reconciledOp); err != nil {
+		l.Error(err, "Failed to re-fetch  operator")
+		return ctrl.Result{}, err
+	}
 
 	if updateStatus {
 		if updateErr := r.Status().Update(ctx, reconciledOp); updateErr != nil {
@@ -93,6 +121,8 @@ func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		panic("spec or metadata changed by reconciler")
 	}
 
+	// We aren't adding finalizers for now. We may need it when moving to annotations implemantation
+	// instead of setting controller ref.
 	if updateFinalizers {
 		if updateErr := r.Update(ctx, reconciledOp); updateErr != nil {
 			return res, utilerrors.NewAggregate([]error{reconcileErr, updateErr})
@@ -113,7 +143,6 @@ func checkForUnexpectedFieldChange(a, b operatorsv1alpha1.Operator) bool {
 func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha1.Operator) (ctrl.Result, error) {
 
 	// todo(perdasilva): this is a _hack_ we probably want to find a better way to ride or die resolve and update
-	fmt.Println("starting resolution")
 	solution, err := r.Resolver.Resolve(ctx)
 	fmt.Println("resolution", len(solution))
 	status := metav1.ConditionTrue
@@ -168,17 +197,19 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		}
 
 		// Create bundleDeployment
-		if err := r.ensureBundleDeployment(ctx, generateExpectedBundleDeployment(operator)); err != nil {
+		dep, err := r.generateExpectedBundleDeployment(operator)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureBundleDeployment(ctx, dep); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
-
 	return ctrl.Result{}, nil
 }
 
-func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alpha1.BundleDeployment {
-	fmt.Println("here creating deployment", "bundlePath****", o.Status.BundlePath)
-	return &rukpakv1alpha1.BundleDeployment{
+func (r *OperatorReconciler) generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) (*rukpakv1alpha1.BundleDeployment, error) {
+	dep := &rukpakv1alpha1.BundleDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: o.GetName(),
 		},
@@ -208,11 +239,17 @@ func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alp
 			},
 		},
 	}
+
+	if err := ctrl.SetControllerReference(&o, dep, r.Scheme); err != nil {
+		return nil, err
+	}
+	return dep, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
+		Owns(&rukpakv1alpha1.BundleDeployment{}).
 		For(&operatorsv1alpha1.Operator{}).
 		Complete(r)
 

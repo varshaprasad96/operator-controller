@@ -10,6 +10,7 @@ import (
 	"github.com/operator-framework/operator-registry/pkg/api"
 
 	"github.com/operator-framework/deppy/pkg/deppy/input"
+	"github.com/operator-framework/deppy/pkg/deppy/input/catalogsource"
 )
 
 type BundleEntity struct {
@@ -169,9 +170,9 @@ func (b *BundleEntity) BundlePath() (string, error) {
 	defer b.mu.Unlock()
 	if b.bundlePath == "" {
 		// Does not use the loadFromEntity as there isn't a need to unmarshal the string.
-		bundlePath, ok := b.Entity.Properties[TypeBundlePath]
+		bundlePath, ok := b.Entity.Properties[catalogsource.TypeBundleSource]
 		if !ok {
-			return "", fmt.Errorf("property '%s' not found", TypeBundlePath)
+			return "", fmt.Errorf("property '%s' not found", catalogsource.TypeBundleSource)
 		}
 
 		b.bundlePath = bundlePath
