@@ -17,21 +17,31 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	catalogsrcscheme "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	"github.com/operator-framework/deppy/pkg/deppy/input/catalogsource"
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/controllers"
+	"github.com/operator-framework/operator-controller/internal/resolution"
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -44,6 +54,8 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(operatorsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(catalogsrcscheme.AddToScheme(scheme))
+	utilruntime.Must(rukpakv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -88,14 +100,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.OperatorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Operator")
+	cli, err := dynamic.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "error creating restcli")
 		os.Exit(1)
 	}
-	//+kubebuilder:scaffold:builder
+
+	watch, err := cli.Resource(schema.GroupVersionResource{
+		Group:    catalogsrcscheme.GroupName,
+		Version:  catalogsrcscheme.GroupVersion,
+		Resource: "catalogsources",
+	}).Watch(context.TODO(), v1.ListOptions{})
+	if err != nil {
+		setupLog.Error(err, "error listing catsrc")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -107,8 +126,28 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
+	cl, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "error creating client")
+	}
+
+	cacheCli := catalogsource.NewCachedRegistryQuerier(watch, cl, catalogsource.NewRegistryGRPCClient(0, cl), &setupLog)
+	setupLog.Info("Starting cache")
+	go cacheCli.StartCache(context.TODO())
+
+	if err = (&controllers.OperatorReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Resolver: resolution.NewOperatorResolver(cl, cacheCli),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Operator")
+		os.Exit(1)
+	}
+	//+kubebuilder:scaffold:builder
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+
 }

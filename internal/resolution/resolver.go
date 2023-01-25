@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/operator-framework/deppy/pkg/deppy"
 	"github.com/operator-framework/deppy/pkg/deppy/input"
 	"github.com/operator-framework/deppy/pkg/deppy/solver"
 	"github.com/operator-framework/operator-controller/api/v1alpha1"
@@ -30,6 +31,9 @@ func (o *OperatorResolver) Resolve(ctx context.Context) (solver.Solution, error)
 	}
 	olmVariableSource := variable_sources.NewOLMVariableSource(packageNames...)
 	deppySolver, err := solver.NewDeppySolver(o.entitySource, olmVariableSource)
+	if err != nil {
+		return nil, err
+	}
 	solution, err := deppySolver.Solve(ctx)
 	if err != nil {
 		return nil, err
@@ -47,4 +51,8 @@ func (o *OperatorResolver) getPackageNames(ctx context.Context) ([]string, error
 		packageNames = append(packageNames, operator.Spec.PackageName)
 	}
 	return packageNames, nil
+}
+
+func (o *OperatorResolver) GetBundlePath(ctx context.Context, id deppy.Identifier) (string, error) {
+	return variable_sources.NewBundleEntity(o.entitySource.Get(ctx, id)).BundlePath()
 }

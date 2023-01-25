@@ -17,6 +17,7 @@ type BundleEntity struct {
 
 	// these properties are lazy loaded as they are requested
 	packageName       string
+	bundlePath        string
 	version           string
 	providedGVKs      []api.GroupVersionKind
 	requiredGVKs      []api.GroupVersionKind
@@ -32,6 +33,11 @@ type ChannelProperties struct {
 	Skips     []string `json:"skips,omitempty"`
 	SkipRange string   `json:"skipRange,omitempty"`
 }
+
+const (
+	// TODO: Move to operatorRegistry
+	TypeBundlePath = "olm.bundle.path"
+)
 
 func NewBundleEntity(entity *input.Entity) *BundleEntity {
 	return &BundleEntity{
@@ -156,4 +162,19 @@ func loadFromEntity[T interface{}](entity *input.Entity, propertyName string) (T
 		return deserializedProperty, fmt.Errorf("property '%s' ('%s') could not be parsed: %s", propertyName, propertyValue, err)
 	}
 	return deserializedProperty, nil
+}
+
+func (b *BundleEntity) BundlePath() (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bundlePath == "" {
+		// Does not use the loadFromEntity as there isn't a need to unmarshal the string.
+		bundlePath, ok := b.Entity.Properties[TypeBundlePath]
+		if !ok {
+			return "", fmt.Errorf("property '%s' not found", TypeBundlePath)
+		}
+
+		b.bundlePath = bundlePath
+	}
+	return b.bundlePath, nil
 }

@@ -18,23 +18,23 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
-	"github.com/operator-framework/api/pkg/operators/v1alpha1"
-	"github.com/operator-framework/deppy/pkg/deppy/input/catalogsource"
+	"github.com/operator-framework/deppy/pkg/deppy"
 	operatorsv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/resolution"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
 )
 
 // OperatorReconciler reconciles a Operator object
@@ -42,12 +42,18 @@ type OperatorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	resolver *resolution.OperatorResolver
+	Resolver *resolution.OperatorResolver
 }
 
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/finalizers,verbs=update
+
+//+kubebuilder:rbac:groups=operators.coreos.com,resources=catalogsources,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=operators.coreos.com,resources=catalogsources/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=operators.coreos.com,resources=catalogsources/finalizers,verbs=update
+
+//+kubebuilder:rbac:groups=core.rukpak.io,resources=bundledeployments,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -59,6 +65,7 @@ type OperatorReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.13.1/pkg/reconcile
 func (r *OperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	fmt.Println("reconciling...")
 	l := log.FromContext(ctx).WithName("reconcile")
 	l.V(1).Info("starting")
 	defer l.V(1).Info("ending")
@@ -106,7 +113,9 @@ func checkForUnexpectedFieldChange(a, b operatorsv1alpha1.Operator) bool {
 func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha1.Operator) (ctrl.Result, error) {
 
 	// todo(perdasilva): this is a _hack_ we probably want to find a better way to ride or die resolve and update
-	solution, err := r.resolver.Resolve(ctx)
+	fmt.Println("starting resolution")
+	solution, err := r.Resolver.Resolve(ctx)
+	fmt.Println("resolution", len(solution))
 	status := metav1.ConditionTrue
 	reason := operatorsv1alpha1.ReasonResolutionSucceeded
 	message := "resolution was successful"
@@ -118,13 +127,19 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 
 	// todo(perdasilva): more hacks - need to fix up the solution structure to be more useful
 	packageVariableIDMap := map[string]string{}
-	if solution != nil {
-		for variableID, ok := range solution {
-			if ok {
-				idComponents := strings.Split(string(variableID), "/")
-				packageVariableIDMap[idComponents[1]] = string(variableID)
-			}
+
+	for variableID, ok := range solution {
+		fmt.Println("variableId", variableID)
+		if ok {
+			idComponents := strings.Split(string(variableID), "/")
+			// TODO: make it more error resistant. This is index 2 because the the entity key is prefixed with olm/
+			packageVariableIDMap[idComponents[2]] = string(variableID)
+			fmt.Println(idComponents[1], "$$$$$$$$$$$$$$")
 		}
+	}
+
+	for k, v := range packageVariableIDMap {
+		fmt.Println("identifier", k, "value", v)
 	}
 
 	operatorList := &operatorsv1alpha1.OperatorList{}
@@ -141,9 +156,19 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 			ObservedGeneration: op.GetGeneration(),
 		})
 		if varID, ok := packageVariableIDMap[operator.Spec.PackageName]; ok {
-			operator.Status.BundlePath = varID
+			bundlePath, err := r.Resolver.GetBundlePath(ctx, deppy.IdentifierFromString(varID))
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			fmt.Println("bundlePath*****", bundlePath)
+			operator.Status.BundlePath = bundlePath
 		}
 		if err := r.Client.Status().Update(ctx, &operator); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Create bundleDeployment
+		if err := r.ensureBundleDeployment(ctx, generateExpectedBundleDeployment(operator)); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -151,27 +176,43 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 	return ctrl.Result{}, nil
 }
 
+func generateExpectedBundleDeployment(o operatorsv1alpha1.Operator) *rukpakv1alpha1.BundleDeployment {
+	fmt.Println("here creating deployment", "bundlePath****", o.Status.BundlePath)
+	return &rukpakv1alpha1.BundleDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: o.GetName(),
+		},
+		Spec: rukpakv1alpha1.BundleDeploymentSpec{
+			//TODO: Don't assume plain provisioner
+			ProvisionerClassName: "core-rukpak-io-plain",
+			Template: &rukpakv1alpha1.BundleTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					// TODO: Remove
+					Labels: map[string]string{
+						"app": "my-bundle",
+					},
+				},
+				Spec: rukpakv1alpha1.BundleSpec{
+					Source: rukpakv1alpha1.BundleSource{
+						// TODO: Don't assume image type
+						Type: rukpakv1alpha1.SourceTypeImage,
+						Image: &rukpakv1alpha1.ImageSource{
+							// TODO: Should consider not reading this from the status of the operator CR.
+							Ref: o.Status.BundlePath,
+						},
+					},
+
+					//TODO: Don't assume registry provisioner
+					ProvisionerClassName: "core-rukpak-io-registry",
+				},
+			},
+		},
+	}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	cli, err := dynamic.NewForConfig(ctrl.GetConfigOrDie())
-	if err != nil {
-		return err
-	}
-
-	watch, err := cli.Resource(schema.GroupVersionResource{
-		Group:    v1alpha1.GroupName,
-		Version:  v1alpha1.GroupVersion,
-		Resource: "catalogsources",
-	}).Watch(context.TODO(), metav1.ListOptions{})
-
-	mgrLogger := zap.New()
-
-	cacheCli := catalogsource.NewCachedRegistryQuerier(watch, mgr.GetClient(), catalogsource.NewRegistryGRPCClient(0, mgr.GetClient()), &mgrLogger)
-
-	cacheCli.StartCache(context.TODO())
-	r.resolver = resolution.NewOperatorResolver(mgr.GetClient(), cacheCli)
-
-	err = ctrl.NewControllerManagedBy(mgr).
+	err := ctrl.NewControllerManagedBy(mgr).
 		For(&operatorsv1alpha1.Operator{}).
 		Complete(r)
 
@@ -179,4 +220,23 @@ func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	return nil
+}
+
+func (r *OperatorReconciler) ensureBundleDeployment(ctx context.Context, desiredBundleDeployment *rukpakv1alpha1.BundleDeployment) error {
+	existingBundleDeployment := &rukpakv1alpha1.BundleDeployment{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: desiredBundleDeployment.GetName()}, existingBundleDeployment)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		return r.Client.Create(ctx, desiredBundleDeployment)
+	}
+
+	// Check if the existing bundleDeployment's spec needs to be updated
+	if equality.Semantic.DeepEqual(existingBundleDeployment.Spec, desiredBundleDeployment.Spec) {
+		return nil
+	}
+
+	existingBundleDeployment.Spec = desiredBundleDeployment.Spec
+	return r.Client.Update(ctx, existingBundleDeployment)
 }
