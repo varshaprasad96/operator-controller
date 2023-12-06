@@ -18,16 +18,17 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
 	catalogd "github.com/operator-framework/catalogd/api/core/v1alpha1"
 	"github.com/operator-framework/deppy/pkg/deppy/solver"
 	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
+	kappctrlv1alpha1 "github.com/vmware-tanzu/carvel-kapp-controller/pkg/apis/kappctrl/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -44,6 +45,249 @@ import (
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
 )
 
+
+var yttRegistryTemplate = `
+#@ load("@ytt:yaml", "yaml")
+#@ load("@ytt:data", "data")
+#@ load("@ytt:assert", "assert")
+#@ load("@ytt:overlay", "overlay")
+#! format.star
+
+#! getinstallns - get annotation value or default
+#!
+#@ def getinstallns(annotations, key, default):
+#@   return annotations[key] if key in annotations else default
+#@ end
+
+#! validate target namespaces based on install modes
+#!
+#@ def validateTargetNamespaces():
+#@  supportedInstallModes = data.values.spec.installModes
+#@  for mode in supportedInstallModes:
+#@     if mode.type == "AllNamespaces" and mode.supported:
+#@        return
+#@     end
+#@  end
+#@  assert.fail("expect all namespaces to be set")
+#@ end
+
+#@ def getAnnotations(depspec):
+#@  if 'annotations' in depspec:
+#@     return depspec.annotations + data.values.metadata.annotations
+#@  end
+#@ return data.values.metadata.annotations
+#@ end
+
+#@ def getAllPerms():
+#@  res = {}
+#@  if 'permissions' in data.values.spec.install.spec:
+#@     res = data.values.spec.install.spec.permissions
+#@  end
+#@  if 'clusterPermissions' in data.values.spec.install.spec:
+#@     res = data.values.spec.install.spec.clusterPermissions
+#@  end
+#@  return res
+#@ end
+
+#@ def getSAName(depspec):
+#@  if 'serviceAccountName' in depspec:
+#@    return depspec.serviceAccountName
+#@  end
+#@ return "default-test"
+#@ end
+
+#! get TargetNamespace based on install modes
+#! 
+#@ def getTargetNamespace():
+#@  supportedInstallModes = data.values.spec.installModes
+#@  for mode in supportedInstallModes:
+#@     supported_modes = []
+#@     if mode.supported:
+#@       supported_modes.append(mode.type)
+#@     end
+#@  end
+#@
+#@  if "AllNamespaces" in supported_modes:
+#@    return ""
+#@  elif "OwnNamespace" in supported_modes:
+#@    return getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@  end
+#@
+#@ end
+
+#! get names hashed for cluster roles and roles
+#!
+#@ def gethashName(csvName, saName):
+#@  baseName = "{}-{}".format(csvName, saName)
+#@  hashStr =  (str(hash(baseName)))[:63-len(baseName)-1]
+#@  return "{}-{}".format(baseName, hashStr)
+#@ end
+
+#! Deployments
+#@ for dep in data.values.spec.install.spec.deployments:
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations: #@ getAnnotations(dep.spec.template.metadata)
+  name: #@ dep.name
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+spec: #@ dep.spec
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  creationTimestamp: null
+  name: #@ getSAName(dep.spec.template.spec)
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+
+
+#! Service account based on permissions and cluster permissions
+#@ if 'permissions' in data.values.spec.install.spec:
+#@ for perm in data.values.spec.install.spec.permissions:
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: #@ getSAName(perm)
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+#@ end
+
+
+#@ if 'clusterPermissions' in data.values.spec.install.spec:
+#@ for perm in data.values.spec.install.spec.clusterPermissions:
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: #@ getSAName(perm)
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+#@ end
+
+
+#! Create cluster roles if in all namespace mode
+#@ if getTargetNamespace() == "":
+#@ allPerms = getAllPerms()
+#@ for perm in allPerms:
+#@ saName = getSAName(perm)
+#@ clusterrolename = gethashName(data.values.metadata.name, saName)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+  name: #@ clusterrolename
+#@overlay/match by=overlay.subset({"rules": "..."})
+rules:
+#@ for rule in perm.rules:
+- apiGroups:
+  - ""
+  resources: #@ rule.resources
+  verbs: #@ rule.verbs
+#@ end
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  creationTimestamp: null
+  name: #@ clusterrolename
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: #@ clusterrolename
+subjects:
+- kind: ServiceAccount
+  name: #@ saName
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+#@ end
+
+
+#! Create roles and role bindings if !allnamespacemode
+#!
+#@ if getTargetNamespace() != "":
+#@ if 'permissions' in data.values.spec.install.spec:
+#@ for perm in data.values.spec.install.spec.permissions:
+#@ saName = getSAName(perm)
+#@ rolename = gethashName(data.values.metadata.name, saName)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+  name: #@ rolename
+rules: #@ perm.rules
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  creationTimestamp: null
+  name: #@ rolename
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: #@ rolename
+subjects:
+- kind: ServiceAccount
+  name: #@ saName
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+#@ end
+#!
+#!
+#!
+#@ if 'clusterPermissions' in data.values.spec.install.spec:
+#@ for perm in data.values.spec.install.spec.clusterPermissions:
+#@ saName = getSAName(perm)
+#@ clusterrolename = gethashName(data.values.metadata.name, saName)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+  name: #@ clusterrolename
+#@overlay/match by=overlay.subset({"rules": "..."})
+rules: #@ perm.rules
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  creationTimestamp: null
+  name: #@ clusterrolename
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: #@ clusterrolename
+subjects:
+- kind: ServiceAccount
+  name: #@ saName
+  namespace: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+#@ end
+#@ end
+#@ end
+
+#! namespace
+#!
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: null
+  name: #@ getinstallns(data.values.metadata.annotations, "operatorframework.io/suggested-namespace", dep.name + "-system")
+spec: {}
+`
+
 // OperatorReconciler reconciles a Operator object
 type OperatorReconciler struct {
 	client.Client
@@ -55,6 +299,7 @@ type OperatorReconciler struct {
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=operators.operatorframework.io,resources=operators/finalizers,verbs=update
 
+//+kubebuilder:rbac:groups=kappctrl.k14s.io,resources=apps,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundledeployments,verbs=get;list;watch;create;update;patch
 
 //+kubebuilder:rbac:groups=catalogd.operatorframework.io,resources=catalogs,verbs=list;watch
@@ -112,6 +357,8 @@ func checkForUnexpectedFieldChange(a, b operatorsv1alpha1.Operator) bool {
 //
 //nolint:unparam
 func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha1.Operator) (ctrl.Result, error) {
+	fmt.Println("here reconcileed")
+
 	// validate spec
 	if err := validators.ValidateOperatorSpec(op); err != nil {
 		// Set the TypeInstalled condition to Unknown to indicate that the resolution
@@ -162,33 +409,44 @@ func (r *OperatorReconciler) reconcile(ctx context.Context, op *operatorsv1alpha
 		setInstalledStatusConditionFailed(&op.Status.Conditions, err.Error(), op.GetGeneration())
 		return ctrl.Result{}, err
 	}
-	bundleProvisioner, err := mapBundleMediaTypeToBundleProvisioner(mediaType)
+	// bundleProvisioner, err := mapBundleMediaTypeToBundleProvisioner(mediaType)
+	// if err != nil {
+	// 	setInstalledStatusConditionFailed(&op.Status.Conditions, err.Error(), op.GetGeneration())
+	// 	return ctrl.Result{}, err
+	// }
+
+	csvName, err := r.getCSVName(*op, bundle)
 	if err != nil {
-		setInstalledStatusConditionFailed(&op.Status.Conditions, err.Error(), op.GetGeneration())
 		return ctrl.Result{}, err
 	}
+	app := r.generateExpectedApp(*op, bundle.Image, csvName, mediaType)
+
+	if err := r.ensureApp(ctx, app); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Ensure a BundleDeployment exists with its bundle source from the bundle
 	// image we just looked up in the solution.
-	dep := r.generateExpectedBundleDeployment(*op, bundle.Image, bundleProvisioner)
-	if err := r.ensureBundleDeployment(ctx, dep); err != nil {
-		// originally Reason: operatorsv1alpha1.ReasonInstallationFailed
-		op.Status.InstalledBundleResource = ""
-		setInstalledStatusConditionFailed(&op.Status.Conditions, err.Error(), op.GetGeneration())
-		return ctrl.Result{}, err
-	}
+	// dep := r.generateExpectedBundleDeployment(*op, bundle.Image, bundleProvisioner)
+	// if err := r.ensureBundleDeployment(ctx, dep); err != nil {
+	// 	// originally Reason: operatorsv1alpha1.ReasonInstallationFailed
+	// 	op.Status.InstalledBundleResource = ""
+	// 	setInstalledStatusConditionFailed(&op.Status.Conditions, err.Error(), op.GetGeneration())
+	// 	return ctrl.Result{}, err
+	// }
 
-	// convert existing unstructured object into bundleDeployment for easier mapping of status.
-	existingTypedBundleDeployment := &rukpakv1alpha1.BundleDeployment{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(dep.UnstructuredContent(), existingTypedBundleDeployment); err != nil {
-		// originally Reason: operatorsv1alpha1.ReasonInstallationStatusUnknown
-		op.Status.InstalledBundleResource = ""
-		setInstalledStatusConditionUnknown(&op.Status.Conditions, err.Error(), op.GetGeneration())
-		return ctrl.Result{}, err
-	}
+	// // convert existing unstructured object into bundleDeployment for easier mapping of status.
+	// existingTypedBundleDeployment := &rukpakv1alpha1.BundleDeployment{}
+	// if err := runtime.DefaultUnstructuredConverter.FromUnstructured(dep.UnstructuredContent(), existingTypedBundleDeployment); err != nil {
+	// 	// originally Reason: operatorsv1alpha1.ReasonInstallationStatusUnknown
+	// 	op.Status.InstalledBundleResource = ""
+	// 	setInstalledStatusConditionUnknown(&op.Status.Conditions, err.Error(), op.GetGeneration())
+	// 	return ctrl.Result{}, err
+	// }
 
-	// Let's set the proper Installed condition and InstalledBundleResource field based on the
-	// existing BundleDeployment object status.
-	mapBDStatusToInstalledCondition(existingTypedBundleDeployment, op)
+	// // Let's set the proper Installed condition and InstalledBundleResource field based on the
+	// // existing BundleDeployment object status.
+	// mapBDStatusToInstalledCondition(existingTypedBundleDeployment, op)
 
 	// set the status of the operator based on the respective bundle deployment status conditions.
 	return ctrl.Result{}, nil
@@ -252,37 +510,72 @@ func (r *OperatorReconciler) bundleFromSolution(solution *solver.Solution, packa
 	return nil, fmt.Errorf("bundle for package %q not found in solution", packageName)
 }
 
-func (r *OperatorReconciler) generateExpectedBundleDeployment(o operatorsv1alpha1.Operator, bundlePath string, bundleProvisioner string) *unstructured.Unstructured {
-	// We use unstructured here to avoid problems of serializing default values when sending patches to the apiserver.
-	// If you use a typed object, any default values from that struct get serialized into the JSON patch, which could
-	// cause unrelated fields to be patched back to the default value even though that isn't the intention. Using an
-	// unstructured ensures that the patch contains only what is specified. Using unstructured like this is basically
-	// identical to "kubectl apply -f"
+func(r *OperatorReconciler) getCSVName(o operatorsv1alpha1.Operator, bundle *catalogmetadata.Bundle) (string, error) {
+	if bundle == nil {
+		return "", errors.New("nil bundle passed.")
+	}
+	ver, err := bundle.Version()
+	if err != nil  {
+		return "", err
+	}
 
-	bd := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": rukpakv1alpha1.GroupVersion.String(),
-		"kind":       rukpakv1alpha1.BundleDeploymentKind,
-		"metadata": map[string]interface{}{
-			"name": o.GetName(),
+	if ver != nil {
+		return "", errors.New("cannot find resolved version")
+	}
+	return fmt.Sprintf("%s.%s.clusterserviceversion.yaml", o.Spec.PackageName, ver), nil
+}
+
+func(r *OperatorReconciler) generateExpectedApp(o operatorsv1alpha1.Operator, bundlePath, csvName, mediaType string) *kappctrlv1alpha1.App {
+	var (
+		appSpecTemplate []kappctrlv1alpha1.AppTemplate
+		subPath string = ""
+	)
+	if mediaType == catalogmetadata.MediaTypeRegistry {
+		subPath = "manifests"
+		appSpecTemplate = append(appSpecTemplate, kappctrlv1alpha1.AppTemplate{
+			Ytt: &kappctrlv1alpha1.AppTemplateYtt{
+				Inline: &kappctrlv1alpha1.AppFetchInline{
+					Paths: map[string]string{
+						"config.yml": yttRegistryTemplate,
+					},
+				},
+				IgnoreUnknownComments: true,
+				ValuesFrom: []kappctrlv1alpha1.AppTemplateValuesSource{
+					{
+						Path: csvName,
+					},
+				},
+				FileMarks: []string{fmt.Sprintf("%s:exclude=true", csvName)},
+			},
+		})
+	}
+	
+	app := &kappctrlv1alpha1.App{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: o.GetName(),
+			// for now hardcoding to "default"
+			Namespace: "default",
 		},
-		"spec": map[string]interface{}{
-			// TODO: Don't assume plain provisioner
-			"provisionerClassName": "core-rukpak-io-plain",
-			"template": map[string]interface{}{
-				"spec": map[string]interface{}{
-					"provisionerClassName": bundleProvisioner,
-					"source": map[string]interface{}{
-						// TODO: Don't assume image type
-						"type": string(rukpakv1alpha1.SourceTypeImage),
-						"image": map[string]interface{}{
-							"ref": bundlePath,
-						},
+		Spec: kappctrlv1alpha1.AppSpec{
+			// hardcoding to the SA that has cluster-admin priviledges
+			ServiceAccountName: "default-ns-sa",
+			Fetch: []kappctrlv1alpha1.AppFetch{
+				{
+					Image: &kappctrlv1alpha1.AppFetchImage{
+						URL: bundlePath,
+						SubPath: subPath,
 					},
 				},
 			},
+			Template: appSpecTemplate,
+			Deploy: []kappctrlv1alpha1.AppDeploy{
+				{
+					Kapp: &kappctrlv1alpha1.AppDeployKapp{},
+				},
+			},
 		},
-	}}
-	bd.SetOwnerReferences([]metav1.OwnerReference{
+	}
+	app.SetOwnerReferences([]metav1.OwnerReference{
 		{
 			APIVersion:         operatorsv1alpha1.GroupVersion.String(),
 			Kind:               "Operator",
@@ -292,7 +585,7 @@ func (r *OperatorReconciler) generateExpectedBundleDeployment(o operatorsv1alpha
 			BlockOwnerDeletion: pointer.Bool(true),
 		},
 	})
-	return bd
+	return app
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -301,7 +594,7 @@ func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&operatorsv1alpha1.Operator{}).
 		Watches(&catalogd.Catalog{},
 			handler.EnqueueRequestsFromMapFunc(operatorRequestsForCatalog(mgr.GetClient(), mgr.GetLogger()))).
-		Owns(&rukpakv1alpha1.BundleDeployment{}).
+		Owns(&kappctrlv1alpha1.App{}).
 		Complete(r)
 
 	if err != nil {
@@ -310,41 +603,29 @@ func (r *OperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return nil
 }
 
-func (r *OperatorReconciler) ensureBundleDeployment(ctx context.Context, desiredBundleDeployment *unstructured.Unstructured) error {
-	// TODO: what if there happens to be an unrelated BD with the same name as the Operator?
-	//   we should probably also check to see if there's an owner reference and/or a label set
-	//   that we expect only to ever be used by the operator controller. That way, we don't
-	//   automatically and silently adopt and change a BD that the user doens't intend to be
-	//   owned by the Operator.
-	existingBundleDeployment, err := r.existingBundleDeploymentUnstructured(ctx, desiredBundleDeployment.GetName())
+
+func(r *OperatorReconciler) ensureApp(ctx context.Context, desiredAppInstance *kappctrlv1alpha1.App) error {
+	existingAppInstance, err := r.existingApp(ctx, desiredAppInstance.Name)
 	if client.IgnoreNotFound(err) != nil {
 		return err
 	}
 
-	// If the existing BD already has everything that the desired BD has, no need to contact the API server.
-	// Make sure the status of the existingBD from the server is as expected.
-	if equality.Semantic.DeepDerivative(desiredBundleDeployment, existingBundleDeployment) {
-		*desiredBundleDeployment = *existingBundleDeployment
+	// Better to convert to unstructured as done with BD.
+	if equality.Semantic.DeepDerivative(desiredAppInstance, existingAppInstance) {
+		*desiredAppInstance = *existingAppInstance
 		return nil
 	}
-
-	return r.Client.Patch(ctx, desiredBundleDeployment, client.Apply, client.ForceOwnership, client.FieldOwner("operator-controller"))
+	return r.Client.Patch(ctx, desiredAppInstance, client.Apply, client.ForceOwnership, client.FieldOwner("operator-controller"))
 }
 
-func (r *OperatorReconciler) existingBundleDeploymentUnstructured(ctx context.Context, name string) (*unstructured.Unstructured, error) {
-	existingBundleDeployment := &rukpakv1alpha1.BundleDeployment{}
-	err := r.Client.Get(ctx, types.NamespacedName{Name: name}, existingBundleDeployment)
-	if err != nil {
+func(r *OperatorReconciler) existingApp(ctx context.Context, name string) (*kappctrlv1alpha1.App, error) {
+	existingApp := &kappctrlv1alpha1.App{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: name}, existingApp); err != nil {
 		return nil, err
 	}
-	existingBundleDeployment.APIVersion = rukpakv1alpha1.GroupVersion.String()
-	existingBundleDeployment.Kind = rukpakv1alpha1.BundleDeploymentKind
-	unstrExistingBundleDeploymentObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(existingBundleDeployment)
-	if err != nil {
-		return nil, err
-	}
-	return &unstructured.Unstructured{Object: unstrExistingBundleDeploymentObj}, nil
+	return existingApp, nil
 }
+
 
 // mapBundleMediaTypeToBundleProvisioner maps an olm.bundle.mediatype property to a
 // rukpak bundle provisioner class name that is capable of unpacking the bundle type

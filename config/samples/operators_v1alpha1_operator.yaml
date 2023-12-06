@@ -9,5 +9,5 @@ metadata:
     app.kubernetes.io/created-by: operator-controller
   name: operator-sample
 spec:
-  packageName: argocd-operator
-  version: 0.6.0
+  packageName: prometheus
+  version: 1.0.0

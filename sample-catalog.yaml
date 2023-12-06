@@ -1,0 +1,9 @@
+apiVersion: catalogd.operatorframework.io/v1alpha1
+kind: Catalog
+metadata:
+  name: sample-prometheus
+spec:
+  source:
+    type: image
+    image:
+      ref: docker.io/varshaprasadnarsing/prometheus-catalog:latest

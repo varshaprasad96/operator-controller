@@ -1,0 +1,20 @@
+schema: olm.package
+name: prometheus
+---
+schema: olm.bundle
+name: prometheus.v1.0.0
+package: prometheus
+image: docker.io/varshaprasadnarsing/prometheus-operator:v1.0.0
+properties:
+  - type: olm.package
+    value:
+      packageName: prometheus
+      version: 1.0.0
+  - type: olm.bundle.mediatype
+    value: registry+v1
+---
+schema: olm.channel
+name: stable
+package: prometheus
+entries:
+  - name: prometheus.v1.0.0

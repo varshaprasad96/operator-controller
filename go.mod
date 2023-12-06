@@ -1,6 +1,8 @@
 module github.com/operator-framework/operator-controller
 
-go 1.20
+go 1.21
+
+toolchain go1.21.0
 
 require (
 	github.com/Masterminds/semver/v3 v3.2.1
@@ -13,6 +15,7 @@ require (
 	github.com/operator-framework/rukpak v0.16.0
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.8.4
+	github.com/vmware-tanzu/carvel-kapp-controller v0.49.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0
 	gopkg.in/yaml.v2 v2.4.0
@@ -103,6 +106,7 @@ require (
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/sirupsen/logrus v1.9.2 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
+	github.com/vmware-tanzu/carvel-vendir v0.33.1 // indirect
 	go.etcd.io/bbolt v1.3.7 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.35.1 // indirect
