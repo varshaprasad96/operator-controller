@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	"github.com/operator-framework/operator-controller/internal/controllers"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
@@ -162,7 +163,7 @@ func run(ctx context.Context, packageName, packageChannel, packageVersionRange, 
 	if err := cl.List(ctx, &bundleDeploymentList); err != nil {
 		return err
 	}
-	variables, err := controllers.GenerateVariables(allBundles, clusterExtensionList.Items, bundleDeploymentList.Items)
+	variables, err := controllers.GenerateVariables(allBundles, internal.ClusterExtensionArrayToInterface(clusterExtensionList.Items), bundleDeploymentList.Items)
 	if err != nil {
 		return err
 	}

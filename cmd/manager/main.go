@@ -124,8 +124,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controllers.ExtensionReconciler{
-		Client: cl,
-		Scheme: mgr.GetScheme(),
+		Client:         cl,
+		BundleProvider: catalogClient,
+		Scheme:         mgr.GetScheme(),
+		Resolver:       resolver,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Extension")
 		os.Exit(1)

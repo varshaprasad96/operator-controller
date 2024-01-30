@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	catalogfilter "github.com/operator-framework/operator-controller/internal/catalogmetadata/filter"
 	catalogsort "github.com/operator-framework/operator-controller/internal/catalogmetadata/sort"
@@ -23,7 +24,7 @@ import (
 // has own variable.
 func MakeInstalledPackageVariables(
 	allBundles []*catalogmetadata.Bundle,
-	clusterExtensions []ocv1alpha1.ClusterExtension,
+	extensions []internal.ExtensionInterface,
 	bundleDeployments []rukpakv1alpha2.BundleDeployment,
 ) ([]*olmvariables.InstalledPackageVariable, error) {
 	var successors successorsFunc = legacySemanticsSuccessors
@@ -33,14 +34,18 @@ func MakeInstalledPackageVariables(
 
 	ownerIDToBundleDeployment := mapOwnerIDToBundleDeployment(bundleDeployments)
 
-	result := make([]*olmvariables.InstalledPackageVariable, 0, len(clusterExtensions))
+	result := make([]*olmvariables.InstalledPackageVariable, 0, len(extensions))
 	processed := sets.Set[string]{}
-	for _, clusterExtension := range clusterExtensions {
-		if clusterExtension.Spec.UpgradeConstraintPolicy == ocv1alpha1.UpgradeConstraintPolicyIgnore {
+	for _, extension := range extensions {
+		if extension.GetUpgradeConstraintPolicy() == ocv1alpha1.UpgradeConstraintPolicyIgnore {
+			continue
+		}
+		pkg := extension.GetPackageSpec()
+		if pkg == nil {
 			continue
 		}
 
-		bundleDeployment, ok := ownerIDToBundleDeployment[clusterExtension.UID]
+		bundleDeployment, ok := ownerIDToBundleDeployment[extension.GetUID()]
 		if !ok {
 			// This can happen when an ClusterExtension is requested,
 			// but not yet installed (e.g. no BundleDeployment created for it)
@@ -61,11 +66,11 @@ func MakeInstalledPackageVariables(
 
 		// find corresponding bundle for the installed content
 		resultSet := catalogfilter.Filter(allBundles, catalogfilter.And(
-			catalogfilter.WithPackageName(clusterExtension.Spec.PackageName),
+			catalogfilter.WithPackageName(pkg.Name),
 			catalogfilter.WithBundleImage(bundleImage),
 		))
 		if len(resultSet) == 0 {
-			return nil, fmt.Errorf("bundle with image %q for package %q not found in available catalogs but is currently installed via BundleDeployment %q", bundleImage, clusterExtension.Spec.PackageName, bundleDeployment.Name)
+			return nil, fmt.Errorf("bundle with image %q for package %q not found in available catalogs but is currently installed via BundleDeployment %q", bundleImage, pkg.Name, bundleDeployment.Name)
 		}
 
 		sort.SliceStable(resultSet, func(i, j int) bool {

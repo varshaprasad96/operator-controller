@@ -6,7 +6,7 @@ import (
 
 	mmsemver "github.com/Masterminds/semver/v3"
 
-	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	catalogfilter "github.com/operator-framework/operator-controller/internal/catalogmetadata/filter"
 	catalogsort "github.com/operator-framework/operator-controller/internal/catalogmetadata/sort"
@@ -16,13 +16,17 @@ import (
 // MakeRequiredPackageVariables returns a variable which represent
 // explicit requirement for a package from an user.
 // This is when a user explicitly asks "install this" via ClusterExtension API.
-func MakeRequiredPackageVariables(allBundles []*catalogmetadata.Bundle, clusterExtensions []ocv1alpha1.ClusterExtension) ([]*olmvariables.RequiredPackageVariable, error) {
+func MakeRequiredPackageVariables(allBundles []*catalogmetadata.Bundle, clusterExtensions []internal.ExtensionInterface) ([]*olmvariables.RequiredPackageVariable, error) {
 	result := make([]*olmvariables.RequiredPackageVariable, 0, len(clusterExtensions))
 
 	for _, clusterExtension := range clusterExtensions {
-		packageName := clusterExtension.Spec.PackageName
-		channelName := clusterExtension.Spec.Channel
-		versionRange := clusterExtension.Spec.Version
+		pkg := clusterExtension.GetPackageSpec()
+		if pkg == nil {
+			return nil, fmt.Errorf("no package specified")
+		}
+		packageName := pkg.Name
+		channelName := pkg.Channel
+		versionRange := pkg.Version
 
 		predicates := []catalogfilter.Predicate[catalogmetadata.Bundle]{
 			catalogfilter.WithPackageName(packageName),

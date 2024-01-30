@@ -17,6 +17,7 @@ import (
 	"github.com/operator-framework/operator-registry/alpha/property"
 
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
 	"github.com/operator-framework/operator-controller/internal/resolution/variablesources"
@@ -233,7 +234,7 @@ func TestMakeRequiredPackageVariables(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			vars, err := variablesources.MakeRequiredPackageVariables(allBundles, tt.clusterExtensions)
+			vars, err := variablesources.MakeRequiredPackageVariables(allBundles, internal.ClusterExtensionArrayToInterface(tt.clusterExtensions))
 			if tt.expectedError == "" {
 				assert.NoError(t, err)
 			} else {

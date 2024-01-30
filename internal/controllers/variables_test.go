@@ -21,6 +21,7 @@ import (
 	"k8s.io/utils/pointer"
 
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	"github.com/operator-framework/operator-controller/internal/controllers"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
@@ -94,7 +95,7 @@ func TestVariableSource(t *testing.T) {
 		},
 	}
 
-	vars, err := controllers.GenerateVariables(allBundles, []ocv1alpha1.ClusterExtension{clusterExtension}, []rukpakv1alpha2.BundleDeployment{bd})
+	vars, err := controllers.GenerateVariables(allBundles, []internal.ExtensionInterface{&clusterExtension}, []rukpakv1alpha2.BundleDeployment{bd})
 	require.NoError(t, err)
 
 	expectedVars := []deppy.Variable{

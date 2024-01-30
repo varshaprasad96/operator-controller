@@ -16,6 +16,7 @@ import (
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
+	"github.com/operator-framework/operator-controller/internal"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
 	"github.com/operator-framework/operator-controller/internal/resolution/variablesources"
@@ -256,7 +257,7 @@ func TestMakeInstalledPackageVariablesWithForceSemverUpgradeConstraintsEnabled(t
 
 			installedPackages, err := variablesources.MakeInstalledPackageVariables(
 				allBundles,
-				[]ocv1alpha1.ClusterExtension{fakeOwnerClusterExtension},
+				[]internal.ExtensionInterface{&fakeOwnerClusterExtension},
 				bundleDeployments,
 			)
 			if tt.expectedError == "" {
@@ -419,7 +420,7 @@ func TestMakeInstalledPackageVariablesWithForceSemverUpgradeConstraintsDisabled(
 
 			installedPackages, err := variablesources.MakeInstalledPackageVariables(
 				allBundles,
-				[]ocv1alpha1.ClusterExtension{fakeOwnerClusterExtension},
+				[]internal.ExtensionInterface{&fakeOwnerClusterExtension},
 				bundleDeployments,
 			)
 			if tt.expectedError == "" {
