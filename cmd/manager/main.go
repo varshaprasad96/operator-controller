@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -29,8 +30,10 @@ import (
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -41,6 +44,7 @@ import (
 	catalogclient "github.com/operator-framework/operator-controller/internal/catalogmetadata/client"
 	"github.com/operator-framework/operator-controller/internal/controllers"
 	"github.com/operator-framework/operator-controller/pkg/features"
+	carvelv1alpha1 "github.com/vmware-tanzu/carvel-kapp-controller/pkg/apis/kappctrl/v1alpha1"
 )
 
 var (
@@ -54,6 +58,7 @@ func init() {
 	utilruntime.Must(ocv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(rukpakv1alpha2.AddToScheme(scheme))
 	utilruntime.Must(catalogd.AddToScheme(scheme))
+	utilruntime.Must(carvelv1alpha1.AddToScheme(scheme))
 
 	//+kubebuilder:scaffold:scheme
 }
@@ -114,16 +119,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	hasKappApis, err := HasKappApis(mgr.GetConfig())
+	fmt.Println("has kapp installed: ", hasKappApis)
+	// We should probably prefer to proceed with creating BD instead of exiting. 
+	if err != nil {
+		setupLog.Error(err, "unable to evaluate if App needs to be created")
+		os.Exit(1)
+	}
+
 	if err = (&controllers.ClusterExtensionReconciler{
 		Client:         cl,
 		BundleProvider: catalogClient,
 		Scheme:         mgr.GetScheme(),
 		Resolver:       resolver,
+		HasKappApis: hasKappApis,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterExtension")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
+
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -140,3 +155,23 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// HasKappApis checks whether the cluster has Kapp APIs installed in the cluster. 
+// This does not guarentee that the controller is present to reconcile the App CRs.
+func HasKappApis(config *rest.Config) (bool, error) {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return false, fmt.Errorf("creating discovery client: %v", err)
+	}
+	apiResourceList, err := discoveryClient.ServerResourcesForGroupVersion(carvelv1alpha1.SchemeGroupVersion.String())
+	if err != nil {
+		return false, fmt.Errorf("listing resource APIs: %v", err)
+	}
+	
+    for _, resource := range apiResourceList.APIResources {
+		if resource.Kind == "App" {
+			return true, nil
+		}
+    }
+	return false, nil
+} 

@@ -45,6 +45,7 @@ import (
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	"github.com/operator-framework/operator-controller/internal/controllers/validators"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
+	kappctrlv1alpha1 "github.com/vmware-tanzu/carvel-kapp-controller/pkg/apis/kappctrl/v1alpha1"
 )
 
 // BundleProvider provides the way to retrieve a list of Bundles from a source,
@@ -59,6 +60,7 @@ type ClusterExtensionReconciler struct {
 	BundleProvider BundleProvider
 	Scheme         *runtime.Scheme
 	Resolver       *solver.Solver
+	HasKappApis bool
 }
 
 //+kubebuilder:rbac:groups=olm.operatorframework.io,resources=clusterextensions,verbs=get;list;watch
@@ -69,6 +71,9 @@ type ClusterExtensionReconciler struct {
 
 //+kubebuilder:rbac:groups=catalogd.operatorframework.io,resources=catalogs,verbs=list;watch
 //+kubebuilder:rbac:groups=catalogd.operatorframework.io,resources=catalogmetadata,verbs=list;watch
+
+
+//+kubebuilder:rbac:groups=kappctrl.k14s.io,resources=apps,verbs=get;list;watch;create;update;patch
 
 func (r *ClusterExtensionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx).WithName("operator-controller")
@@ -186,6 +191,32 @@ func (r *ClusterExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alp
 		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
 		return ctrl.Result{}, err
 	}
+
+	if r.HasKappApis && mediaType != catalogmetadata.MediaTypeRegistry {
+		app := r.GenerateExpectedApp(*ext, bundle.Image)
+		if err := r.ensureApp(ctx, app); err != nil {
+			// originally Reason: ocv1alpha1.ReasonInstallationFailed
+			ext.Status.InstalledBundleResource = ""
+			setInstalledStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
+			setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
+			return ctrl.Result{}, err
+		}
+
+		// Converting into structured so that we can map the relevant status to Extension. 
+		existingTypedApp := &kappctrlv1alpha1.App{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(app.UnstructuredContent(), existingTypedApp); err != nil {
+			// originally Reason: ocv1alpha1.ReasonInstallationStatusUnknown
+			
+
+			
+			ext.Status.InstalledBundleResource = ""
+			setInstalledStatusConditionUnknown(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
+			setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, err
+	}
+
 	bundleProvisioner, err := mapBundleMediaTypeToBundleProvisioner(mediaType)
 	if err != nil {
 		setInstalledStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
@@ -221,6 +252,16 @@ func (r *ClusterExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alp
 
 	// set the status of the cluster extension based on the respective bundle deployment status conditions.
 	return ctrl.Result{}, nil
+}
+
+func (r *ClusterExtensionReconciler) findReconcileConidtion(app *kappctrlv1alpha1.App, condition string) bool{
+	availableConditions := app.Status.Conditions
+	for _, cond := range availableConditions {
+		if cond.Type == kappctrlv1alpha1.ConditionType(condition) {
+			return cond.Status == metav1.StatusSuccess
+		}
+	}
+	return false
 }
 
 func (r *ClusterExtensionReconciler) variables(ctx context.Context) ([]deppy.Variable, error) {
@@ -424,6 +465,59 @@ func (r *ClusterExtensionReconciler) GenerateExpectedBundleDeployment(o ocv1alph
 	return bd
 }
 
+func (r *ClusterExtensionReconciler) GenerateExpectedApp(o ocv1alpha1.ClusterExtension, bundlePath string) *unstructured.Unstructured {
+	// We use unstructured here to avoid problems of serializing default values when sending patches to the apiserver.
+	// If you use a typed object, any default values from that struct get serialized into the JSON patch, which could
+	// cause unrelated fields to be patched back to the default value even though that isn't the intention. Using an
+	// unstructured ensures that the patch contains only what is specified. Using unstructured like this is basically
+	// identical to "kubectl apply -f"
+	spec := map[string]interface{}{
+		"serviceAccountName": "default-ns-sa",
+		"fetch": []interface{}{
+			map[string]interface{}{
+				"image": map[string]interface{}{
+					"url": bundlePath,
+				},
+			},
+		},
+		"template": []interface{}{
+			map[string]interface{}{
+				"ytt": map[string]interface{}{},
+			},
+		},
+		"deploy": []interface{}{
+			map[string]interface{}{
+				"kapp": map[string]interface{}{},
+			},
+		},
+	}
+
+	app := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "kappctrl.k14s.io/v1alpha1",
+			"kind": "App",
+			"metadata": map[string]interface{}{
+				"name":      o.GetName(),
+				// Let the namespace be the default.
+				"namespace": "default",
+			},
+			"spec": spec,
+		},
+	}
+
+	app.SetOwnerReferences([]metav1.OwnerReference{
+		{
+			APIVersion:         ocv1alpha1.GroupVersion.String(),
+			Kind:               "ClusterExtension",
+			Name:               o.Name,
+			UID:                o.UID,
+			Controller:         pointer.Bool(true),
+			BlockOwnerDeletion: pointer.Bool(true),
+		},
+	})
+	return app
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *ClusterExtensionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
@@ -431,6 +525,8 @@ func (r *ClusterExtensionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&catalogd.Catalog{},
 			handler.EnqueueRequestsFromMapFunc(clusterExtensionRequestsForCatalog(mgr.GetClient(), mgr.GetLogger()))).
 		Owns(&rukpakv1alpha2.BundleDeployment{}).
+		// Set up watches only if this exists on cluster. 
+		Owns(&kappctrlv1alpha1.App{}).
 		Complete(r)
 
 	if err != nil {
@@ -458,6 +554,37 @@ func (r *ClusterExtensionReconciler) ensureBundleDeployment(ctx context.Context,
 	}
 
 	return r.Client.Patch(ctx, desiredBundleDeployment, client.Apply, client.ForceOwnership, client.FieldOwner("operator-controller"))
+}
+
+func (r *ClusterExtensionReconciler) ensureApp(ctx context.Context, desiredApp *unstructured.Unstructured) error {
+	existingApp, err := r.existingAppUnstructured(ctx, desiredApp.GetName(), desiredApp.GetNamespace())
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+
+	// If the existing BD already has everything that the desired BD has, no need to contact the API server.
+	// Make sure the status of the existingBD from the server is as expected.
+	if equality.Semantic.DeepDerivative(desiredApp, existingApp) {
+		*desiredApp = *existingApp
+		return nil
+	}
+
+	return r.Client.Patch(ctx, desiredApp, client.Apply, client.ForceOwnership, client.FieldOwner("operator-controller"))
+}
+
+func (r *ClusterExtensionReconciler) existingAppUnstructured(ctx context.Context, name, namespace string) (*unstructured.Unstructured, error) {
+	existingApp := &kappctrlv1alpha1.App{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, existingApp)
+	if err != nil {
+		return nil, err
+	}
+	existingApp.APIVersion = "kappctrl.k14s.io/v1alpha1"
+	existingApp.Kind = "App"
+	unstrExistingAppObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(existingApp)
+	if err != nil {
+		return nil, err
+	}
+	return &unstructured.Unstructured{Object: unstrExistingAppObj}, nil
 }
 
 func (r *ClusterExtensionReconciler) existingBundleDeploymentUnstructured(ctx context.Context, name string) (*unstructured.Unstructured, error) {
