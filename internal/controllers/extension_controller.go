@@ -106,6 +106,12 @@ func (*ExtensionReconciler) checkForUnexpectedFieldChange(a, b ocv1alpha1.Extens
 //
 //nolint:unparam
 func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Extension) (ctrl.Result, error) {
+
+	// Don't do anything if Paused
+	if ext.Spec.Managed == ocv1alpha1.ManagedStatePaused {
+		return ctrl.Result{}, nil
+	}
+
 	// validate spec
 	if err := validators.ValidateExtensionSpec(ext); err != nil {
 		// Set the TypeInstalled condition to Unknown to indicate that the resolution
