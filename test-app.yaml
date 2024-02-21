@@ -1,0 +1,14 @@
+apiVersion: kappctrl.k14s.io/v1alpha1
+kind: App
+metadata:
+  name: simple-app
+  namespace: default
+spec:
+  serviceAccountName: default-ns-sa
+  fetch:
+  - image:
+      url: localhost:5000/operator-framework-coastal-bundle:v1.0.0
+  template:
+  - ytt: {}
+  deploy:
+  - kapp: {}

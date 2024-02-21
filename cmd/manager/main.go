@@ -58,6 +58,7 @@ func init() {
 	utilruntime.Must(ocv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(rukpakv1alpha2.AddToScheme(scheme))
 	utilruntime.Must(catalogd.AddToScheme(scheme))
+	utilruntime.Must(carvelv1alpha1.AddToScheme(scheme))
 
 	//+kubebuilder:scaffold:scheme
 }

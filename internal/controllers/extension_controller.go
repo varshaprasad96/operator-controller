@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,11 +31,14 @@ import (
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/logr"
+	"github.com/google/go-cmp/cmp"
 	catalogd "github.com/operator-framework/catalogd/api/core/v1alpha1"
 	"github.com/operator-framework/deppy/pkg/deppy"
 	"github.com/operator-framework/deppy/pkg/deppy/solver"
@@ -57,7 +61,7 @@ type ExtensionReconciler struct {
 	HasKappApis bool
 }
 
-var kappApiUnavailableError error = errors.New("kapp-controller apis unavailable on cluster.")
+var errkappApiUnavailable error = errors.New("kapp-controller apis unavailable on cluster")
 
 //+kubebuilder:rbac:groups=olm.operatorframework.io,resources=extensions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=olm.operatorframework.io,resources=extensions/status,verbs=get;update;patch
@@ -73,6 +77,7 @@ func (r *ExtensionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	var existingExt = &ocv1alpha1.Extension{}
 	if err := r.Client.Get(ctx, req.NamespacedName, existingExt); err != nil {
+		fmt.Println("here", err)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -134,8 +139,6 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 		// hasn't been attempted yet, due to the spec being invalid.
 		ext.Status.ResolvedBundleResource = ""
 		setResolvedStatusConditionUnknown(&ext.Status.Conditions, "validation has not been attempted as spec is invalid", ext.GetGeneration())
-
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as spec is invalid", ext.GetGeneration())
 		return ctrl.Result{}, nil
 	}
 
@@ -146,8 +149,6 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 		setInstalledStatusConditionUnknown(&ext.Status.Conditions, "installation has not been attempted due to failure to gather data for resolution", ext.GetGeneration())
 		ext.Status.ResolvedBundleResource = ""
 		setResolvedStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted due to failure to gather data for resolution", ext.GetGeneration())
 		return ctrl.Result{}, err
 	}
 
@@ -158,8 +159,6 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 		setInstalledStatusConditionUnknown(&ext.Status.Conditions, "installation has not been attempted as resolution failed", ext.GetGeneration())
 		ext.Status.ResolvedBundleResource = ""
 		setResolvedStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as resolution failed", ext.GetGeneration())
 		return ctrl.Result{}, err
 	}
 
@@ -171,8 +170,6 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 		setInstalledStatusConditionUnknown(&ext.Status.Conditions, "installation has not been attempted as resolution failed", ext.GetGeneration())
 		ext.Status.ResolvedBundleResource = ""
 		setResolvedStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as resolution failed", ext.GetGeneration())
 		return ctrl.Result{}, err
 	}
 
@@ -189,23 +186,20 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 	mediaType, err := bundle.MediaType()
 	if err != nil {
 		setInstalledStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
 		return ctrl.Result{}, err
 	}
 
 	if !r.HasKappApis {
-		setInstalledStatusConditionFailed(&ext.Status.Conditions, kappApiUnavailableError.Error(), ext.GetGeneration())
-		setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
-		return ctrl.Result{}, kappApiUnavailableError
+		setInstalledStatusConditionFailed(&ext.Status.Conditions, errkappApiUnavailable.Error(), ext.GetGeneration())
+		return ctrl.Result{}, errkappApiUnavailable
 	}
 
-	if mediaType != catalogmetadata.MediaTypeRegistry {
+	if mediaType == catalogmetadata.MediaTypePlain {
 		app := r.GenerateExpectedApp(*ext, bundle.Image)
 		if err := r.ensureApp(ctx, app); err != nil {
 			// originally Reason: ocv1alpha1.ReasonInstallationFailed
 			ext.Status.InstalledBundleResource = ""
 			setInstalledStatusConditionFailed(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-			setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
 			return ctrl.Result{}, err
 		}
 
@@ -213,18 +207,42 @@ func (r *ExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alpha1.Ext
 		existingTypedApp := &kappctrlv1alpha1.App{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(app.UnstructuredContent(), existingTypedApp); err != nil {
 			// originally Reason: ocv1alpha1.ReasonInstallationStatusUnknown
-			
-
-			
 			ext.Status.InstalledBundleResource = ""
 			setInstalledStatusConditionUnknown(&ext.Status.Conditions, err.Error(), ext.GetGeneration())
-			setDeprecationStatusesUnknown(&ext.Status.Conditions, "deprecation checks have not been attempted as installation has failed", ext.GetGeneration())
 			return ctrl.Result{}, err
 		}
+
+		mapAppStatusToInstalledCondition(existingTypedApp, ext, bundle.Image)
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// TODO: follow up with mapping of all the available App statuses: https://github.com/carvel-dev/kapp-controller/blob/855063edee53315811a13ee8d5df1431ba258ede/pkg/apis/kappctrl/v1alpha1/status.go#L28-L35
+// mapAppStatusToInstalledCondition currently maps only the installed condition. 
+func mapAppStatusToInstalledCondition(existingApp *kappctrlv1alpha1.App, ext *ocv1alpha1.Extension, bundleImage string) {
+	appReady := findStatusCondition(existingApp.Status.GenericStatus.Conditions, kappctrlv1alpha1.ReconcileSucceeded)
+	if appReady == nil {
+		ext.Status.InstalledBundleResource = ""
+		setInstalledStatusConditionUnknown(&ext.Status.Conditions, "install status unknown", ext.Generation)
+		return
+	}
+
+	if appReady.Status != v1.ConditionTrue {
+		ext.Status.InstalledBundleResource = ""
+		setInstalledStatusConditionFailed(
+			&ext.Status.Conditions,
+			appReady.Message,
+			ext.GetGeneration(),
+		)
+		return
+	}
+
+	// InstalledBundleResource this should be converted into a slice as App allows fetching
+	// from multiple sources. 
+	ext.Status.InstalledBundleResource = bundleImage
+	setInstalledStatusConditionSuccess(&ext.Status.Conditions, appReady.Message, ext.Generation)
 }
 
 func (r *ExtensionReconciler) ensureApp(ctx context.Context, desiredApp *unstructured.Unstructured) error {
@@ -256,6 +274,17 @@ func (r *ExtensionReconciler) existingAppUnstructured(ctx context.Context, name,
 		return nil, err
 	}
 	return &unstructured.Unstructured{Object: unstrExistingAppObj}, nil
+}
+
+// findStatusCondition finds the conditionType in conditions. 
+// TODO: suggest using upstream conditions to Carvel. 
+func findStatusCondition(conditions []kappctrlv1alpha1.Condition, conditionType kappctrlv1alpha1.ConditionType) *kappctrlv1alpha1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == conditionType {
+			return &conditions[i]
+		}
+	}
+	return nil
 }
 
 
@@ -349,6 +378,23 @@ func (r *ExtensionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&ocv1alpha1.Extension{}).
 		// Enqueue apps only owned by extension?
 		Owns(&kappctrlv1alpha1.App{}).
+		WithEventFilter(predicate.Funcs{
+            CreateFunc: func(e event.CreateEvent) bool {
+               fmt.Println("create event", e.Object.GetName())
+                return true 
+            },
+            UpdateFunc: func(e event.UpdateEvent) bool {
+				fmt.Println("update event*********", e.ObjectOld.GetName(), e.ObjectNew.GetName())
+				fmt.Println(cmp.Diff(e.ObjectOld,e.ObjectNew))
+                // Add your filtering logic here for update events
+                return true // or false based on your criteria
+            },
+            DeleteFunc: func(e event.DeleteEvent) bool {
+				fmt.Println("delete event", e.Object.GetName())
+                // Add your filtering logic here for delete events
+                return true // or false based on your criteria
+            },
+        }).
 		Watches(&catalogd.Catalog{},
 			handler.EnqueueRequestsFromMapFunc(extensionRequestsForCatalog(mgr.GetClient(), mgr.GetLogger()))).
 		Complete(r)
@@ -376,3 +422,4 @@ func extensionRequestsForCatalog(c client.Reader, logger logr.Logger) handler.Ma
 		return requests
 	}
 }
+
