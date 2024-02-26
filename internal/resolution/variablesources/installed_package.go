@@ -15,6 +15,7 @@ import (
 	catalogsort "github.com/operator-framework/operator-controller/internal/catalogmetadata/sort"
 	olmvariables "github.com/operator-framework/operator-controller/internal/resolution/variables"
 	"github.com/operator-framework/operator-controller/pkg/features"
+	kappctrlv1alpha1 "github.com/vmware-tanzu/carvel-kapp-controller/pkg/apis/kappctrl/v1alpha1"
 )
 
 // MakeInstalledPackageVariables returns variables representing packages
@@ -145,4 +146,92 @@ func mapOwnerIDToBundleDeployment(bundleDeployments []rukpakv1alpha2.BundleDeplo
 	}
 
 	return result
+}
+
+func mapOwnerIDToApp(apps []kappctrlv1alpha1.App) map[types.UID]*kappctrlv1alpha1.App {
+	result := map[types.UID]*kappctrlv1alpha1.App{}
+
+	for idx := range apps {
+		for _, ref := range apps[idx].OwnerReferences {
+			result[ref.UID] = &apps[idx]
+		}
+	}
+
+	return result
+}
+
+// MakeInstalledPackageVariablesForExtension returns variables representing packages
+// already installed in the system.
+// Meaning that each App managed by operator-controller
+// has own variable.
+func MakeInstalledPackageVariablesForExtension(
+	allBundles []*catalogmetadata.Bundle,
+	extensions []ocv1alpha1.Extension,
+	apps []kappctrlv1alpha1.App,
+) ([]*olmvariables.InstalledPackageVariable, error) {
+	var successors successorsFunc = legacySemanticsSuccessors
+	if features.OperatorControllerFeatureGate.Enabled(features.ForceSemverUpgradeConstraints) {
+		successors = semverSuccessors
+	}
+
+	ownerIDToBundleDeployment := mapOwnerIDToApp(apps)
+
+	result := make([]*olmvariables.InstalledPackageVariable, 0, len(extensions))
+	processed := sets.Set[string]{}
+	for _, extension := range extensions {
+		if extension.Spec.Source.Package.UpgradeConstraintPolicy == ocv1alpha1.UpgradeConstraintPolicyIgnore {
+			continue
+		}
+
+		app, ok := ownerIDToBundleDeployment[extension.UID]
+		if !ok {
+			// This can happen when an ClusterExtension is requested,
+			// but not yet installed (e.g. no BundleDeployment created for it)
+			continue
+		}
+
+		// Should not happen, validations in place.
+		if len(app.Spec.Fetch) == 0 {
+			return nil, fmt.Errorf("no source defined in App CR %v", app.Name)
+		}
+
+		// TODO: Very risky. Assumes only one source and the first argument is always an image.
+		// Extension api needs to be modified to accept multiple sources.
+		sourceImage := app.Spec.Fetch[0].Image
+		if sourceImage == nil || sourceImage.URL == "" {
+			continue
+		}
+
+		if processed.Has(sourceImage.URL) {
+			continue
+		}
+		processed.Insert(sourceImage.URL)
+
+		bundleImage := sourceImage.URL
+
+		// find corresponding bundle for the installed content
+		resultSet := catalogfilter.Filter(allBundles, catalogfilter.And(
+			catalogfilter.WithPackageName(extension.Spec.Source.Package.Name),
+			catalogfilter.WithBundleImage(bundleImage),
+		))
+		if len(resultSet) == 0 {
+			return nil, fmt.Errorf("bundle with image %q for package %q not found in available catalogs but is currently installed via BundleDeployment %q", bundleImage, extension.Spec.Source.Package.Name, app.Name)
+		}
+
+		sort.SliceStable(resultSet, func(i, j int) bool {
+			return catalogsort.ByVersion(resultSet[i], resultSet[j])
+		})
+		installedBundle := resultSet[0]
+
+		upgradeEdges, err := successors(allBundles, installedBundle)
+		if err != nil {
+			return nil, err
+		}
+
+		// you can always upgrade to yourself, i.e. not upgrade
+		upgradeEdges = append(upgradeEdges, installedBundle)
+		result = append(result, olmvariables.NewInstalledPackageVariable(installedBundle.Package, upgradeEdges))
+	}
+
+	return result, nil
 }

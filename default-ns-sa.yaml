@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default-ns-sa
+  namespace: coastal-system
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: default-ns-role
+  namespace: coastal-system
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: default-ns-role-binding
+  namespace: coastal-system
+subjects:
+- kind: ServiceAccount
+  name: default-ns-sa
+  namespace: coastal-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: default-ns-role
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: default-ns-cluster-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: default-ns-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: default-ns-sa
+  namespace: coastal-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: default-ns-cluster-role

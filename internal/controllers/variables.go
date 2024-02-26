@@ -23,6 +23,7 @@ import (
 	ocv1alpha1 "github.com/operator-framework/operator-controller/api/v1alpha1"
 	"github.com/operator-framework/operator-controller/internal/catalogmetadata"
 	"github.com/operator-framework/operator-controller/internal/resolution/variablesources"
+	kappctrlv1alpha1 "github.com/vmware-tanzu/carvel-kapp-controller/pkg/apis/kappctrl/v1alpha1"
 )
 
 func GenerateVariables(allBundles []*catalogmetadata.Bundle, clusterExtensions []ocv1alpha1.ClusterExtension, bundleDeployments []rukpakv1alpha2.BundleDeployment) ([]deppy.Variable, error) {
@@ -32,6 +33,40 @@ func GenerateVariables(allBundles []*catalogmetadata.Bundle, clusterExtensions [
 	}
 
 	installedPackages, err := variablesources.MakeInstalledPackageVariables(allBundles, clusterExtensions, bundleDeployments)
+	if err != nil {
+		return nil, err
+	}
+
+	bundles, err := variablesources.MakeBundleVariables(allBundles, requiredPackages, installedPackages)
+	if err != nil {
+		return nil, err
+	}
+
+	bundleUniqueness := variablesources.MakeBundleUniquenessVariables(bundles)
+
+	result := []deppy.Variable{}
+	for _, v := range requiredPackages {
+		result = append(result, v)
+	}
+	for _, v := range installedPackages {
+		result = append(result, v)
+	}
+	for _, v := range bundles {
+		result = append(result, v)
+	}
+	for _, v := range bundleUniqueness {
+		result = append(result, v)
+	}
+	return result, nil
+}
+
+func GenerateVariablesForApp(allBundles []*catalogmetadata.Bundle, extensions []ocv1alpha1.Extension, apps []kappctrlv1alpha1.App) ([]deppy.Variable, error) {
+	requiredPackages, err := variablesources.MakeRequiredPackageVariablesForExtensions(allBundles, extensions)
+	if err != nil {
+		return nil, err
+	}
+
+	installedPackages, err := variablesources.MakeInstalledPackageVariablesForExtension(allBundles, extensions, apps)
 	if err != nil {
 		return nil, err
 	}
