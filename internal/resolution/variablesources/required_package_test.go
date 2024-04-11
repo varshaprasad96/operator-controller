@@ -145,9 +145,11 @@ func TestMakeRequiredPackageVariables(t *testing.T) {
 				Name: fmt.Sprintf("op-%s-%s-%s", packageName, channelName, versionRange),
 			},
 			Spec: ocv1alpha1.ClusterExtensionSpec{
-				PackageName: packageName,
-				Version:     versionRange,
-				Channel:     channelName,
+				Source: ocv1alpha1.ClusterExtensionSource{
+					Name:    packageName,
+					Version: versionRange,
+					Channel: channelName,
+				},
 			},
 		}
 	}

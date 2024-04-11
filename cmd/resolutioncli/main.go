@@ -138,9 +138,11 @@ func run(ctx context.Context, packageName, packageChannel, packageVersionRange, 
 			Name: "resolutioncli-input",
 		},
 		Spec: ocv1alpha1.ClusterExtensionSpec{
-			PackageName: packageName,
-			Channel:     packageChannel,
-			Version:     packageVersionRange,
+			Source: ocv1alpha1.ClusterExtensionSource{
+				Name:    packageName,
+				Channel: packageChannel,
+				Version: packageVersionRange,
+			},
 		},
 	})
 

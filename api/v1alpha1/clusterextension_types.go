@@ -40,9 +40,28 @@ const (
 
 // ClusterExtensionSpec defines the desired state of ClusterExtension
 type ClusterExtensionSpec struct {
+	// source of ClusterExtensionSource to be installed
+	// TODO: embed the above 3 in this. How open are we in changing the CE spec?
+	// Having this source seems neater.
+	Source ClusterExtensionSource `json:"source"`
+
+	//+kubebuilder:Optional
+	//
+	// paused controls the management state of the extension. If the extension is paused, it will be ignored by the extension controller.
+	Paused bool `json:"paused,omitempty"`
+
+	//+kubebuilder:Optional
+	//
+	// watchNamespaces indicates which namespaces the extension should watch.
+	// This feature is currently supported only with RegistryV1 bundles.
+	WatchNamespaces []string `json:"watchNamespaces,omitempty"`
+}
+
+type ClusterExtensionSource struct {
 	//+kubebuilder:validation:MaxLength:=48
 	//+kubebuilder:validation:Pattern:=^[a-z0-9]+(-[a-z0-9]+)*$
-	PackageName string `json:"packageName"`
+	// name specifies the name of the name of the package
+	Name string `json:"name"`
 
 	//+kubebuilder:validation:MaxLength:=64
 	//+kubebuilder:validation:Pattern=`^(\s*(=||!=|>|<|>=|=>|<=|=<|~|~>|\^)\s*(v?(0|[1-9]\d*|[x|X|\*])(\.(0|[1-9]\d*|x|X|\*]))?(\.(0|[1-9]\d*|x|X|\*))?(-([0-9A-Za-z\-]+(\.[0-9A-Za-z\-]+)*))?(\+([0-9A-Za-z\-]+(\.[0-9A-Za-z\-]+)*))?)\s*)((?:\s+|,\s*|\s*\|\|\s*)(=||!=|>|<|>=|=>|<=|=<|~|~>|\^)\s*(v?(0|[1-9]\d*|x|X|\*])(\.(0|[1-9]\d*|x|X|\*))?(\.(0|[1-9]\d*|x|X|\*]))?(-([0-9A-Za-z\-]+(\.[0-9A-Za-z\-]+)*))?(\+([0-9A-Za-z\-]+(\.[0-9A-Za-z\-]+)*))?)\s*)*$`
@@ -52,25 +71,20 @@ type ClusterExtensionSpec struct {
 	// Examples: 1.2.3, 1.0.0-alpha, 1.0.0-rc.1
 	//
 	// For more information on semver, please see https://semver.org/
+	// version constraint definition
 	Version string `json:"version,omitempty"`
 
 	//+kubebuilder:validation:MaxLength:=48
 	//+kubebuilder:validation:Pattern:=^[a-z0-9]+([\.-][a-z0-9]+)*$
-	// Channel constraint definition
+	// channel constraint definition
 	Channel string `json:"channel,omitempty"`
 
 	//+kubebuilder:validation:Enum:=Enforce;Ignore
 	//+kubebuilder:default:=Enforce
 	//+kubebuilder:Optional
 	//
-	// Defines the policy for how to handle upgrade constraints
+	// upgradeConstraintPolicy Defines the policy for how to handle upgrade constraints
 	UpgradeConstraintPolicy UpgradeConstraintPolicy `json:"upgradeConstraintPolicy,omitempty"`
-
-	//+kubebuilder:Optional
-	//
-	// watchNamespaces indicates which namespaces the extension should watch.
-	// This feature is currently supported only with RegistryV1 bundles.
-	WatchNamespaces []string `json:"watchNamespaces,omitempty"`
 }
 
 const (

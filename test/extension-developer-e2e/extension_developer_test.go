@@ -37,7 +37,9 @@ func TestExtensionDeveloper(t *testing.T) {
 				Name: "plainv0",
 			},
 			Spec: ocv1alpha1.ClusterExtensionSpec{
-				PackageName: os.Getenv("PLAIN_PKG_NAME"),
+				Source: ocv1alpha1.ClusterExtensionSource{
+					Name: os.Getenv("PLAIN_PKG_NAME"),
+				},
 			},
 		},
 		{
@@ -45,7 +47,9 @@ func TestExtensionDeveloper(t *testing.T) {
 				Name: "registryv1",
 			},
 			Spec: ocv1alpha1.ClusterExtensionSpec{
-				PackageName: os.Getenv("REG_PKG_NAME"),
+				Source: ocv1alpha1.ClusterExtensionSource{
+					Name: os.Getenv("REG_PKG_NAME"),
+				},
 			},
 		},
 	}

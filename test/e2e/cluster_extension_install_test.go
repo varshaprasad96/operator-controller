@@ -73,7 +73,9 @@ func TestClusterExtensionInstallRegistry(t *testing.T) {
 	defer getArtifactsOutput(t)
 
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: "prometheus",
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name: "prometheus",
+		},
 	}
 	t.Log("It resolves the specified package with correct bundle path")
 	t.Log("By creating the ClusterExtension resource")
@@ -129,7 +131,9 @@ func TestClusterExtensionInstallPlain(t *testing.T) {
 	defer getArtifactsOutput(t)
 
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: "plain",
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name: "plain",
+		},
 	}
 	t.Log("It resolves the specified package with correct bundle path")
 	t.Log("By creating the ClusterExtension resource")
@@ -186,7 +190,9 @@ func TestClusterExtensionInstallReResolvesWhenNewCatalog(t *testing.T) {
 
 	pkgName := "prometheus"
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: pkgName,
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name: pkgName,
+		},
 	}
 
 	t.Log("By deleting the catalog first")
@@ -247,8 +253,10 @@ func TestClusterExtensionBlockInstallNonSuccessorVersion(t *testing.T) {
 
 	t.Log("By creating an ClusterExtension at a specified version")
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: "prometheus",
-		Version:     "1.0.0",
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name:    "prometheus",
+			Version: "1.0.0",
+		},
 	}
 	require.NoError(t, c.Create(context.Background(), clusterExtension))
 	t.Log("By eventually reporting a successful resolution")
@@ -266,7 +274,7 @@ func TestClusterExtensionBlockInstallNonSuccessorVersion(t *testing.T) {
 	t.Log("It does not allow to upgrade the ClusterExtension to a non-successor version")
 	t.Log("By updating the ClusterExtension resource to a non-successor version")
 	// 1.2.0 does not replace/skip/skipRange 1.0.0.
-	clusterExtension.Spec.Version = "1.2.0"
+	clusterExtension.Spec.Source.Version = "1.2.0"
 	require.NoError(t, c.Update(context.Background(), clusterExtension))
 	t.Log("By eventually reporting an unsatisfiable resolution")
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -292,8 +300,10 @@ func TestClusterExtensionForceInstallNonSuccessorVersion(t *testing.T) {
 
 	t.Log("By creating an ClusterExtension at a specified version")
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: "prometheus",
-		Version:     "1.0.0",
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name:    "prometheus",
+			Version: "1.0.0",
+		},
 	}
 	require.NoError(t, c.Create(context.Background(), clusterExtension))
 	t.Log("By eventually reporting a successful resolution")
@@ -311,8 +321,8 @@ func TestClusterExtensionForceInstallNonSuccessorVersion(t *testing.T) {
 	t.Log("It does not allow to upgrade the ClusterExtension to a non-successor version")
 	t.Log("By updating the ClusterExtension resource to a non-successor version")
 	// 1.2.0 does not replace/skip/skipRange 1.0.0.
-	clusterExtension.Spec.Version = "1.2.0"
-	clusterExtension.Spec.UpgradeConstraintPolicy = ocv1alpha1.UpgradeConstraintPolicyIgnore
+	clusterExtension.Spec.Source.Version = "1.2.0"
+	clusterExtension.Spec.Source.UpgradeConstraintPolicy = ocv1alpha1.UpgradeConstraintPolicyIgnore
 	require.NoError(t, c.Update(context.Background(), clusterExtension))
 	t.Log("By eventually reporting an unsatisfiable resolution")
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -336,8 +346,10 @@ func TestClusterExtensionInstallSuccessorVersion(t *testing.T) {
 
 	t.Log("By creating an ClusterExtension at a specified version")
 	clusterExtension.Spec = ocv1alpha1.ClusterExtensionSpec{
-		PackageName: "prometheus",
-		Version:     "1.0.0",
+		Source: ocv1alpha1.ClusterExtensionSource{
+			Name:    "prometheus",
+			Version: "1.0.0",
+		},
 	}
 	require.NoError(t, c.Create(context.Background(), clusterExtension))
 	t.Log("By eventually reporting a successful resolution")
@@ -355,7 +367,7 @@ func TestClusterExtensionInstallSuccessorVersion(t *testing.T) {
 	t.Log("It does allow to upgrade the ClusterExtension to any of the successor versions within non-zero major version")
 	t.Log("By updating the ClusterExtension resource by skipping versions")
 	// 1.0.1 replaces 1.0.0 in the test catalog
-	clusterExtension.Spec.Version = "1.0.1"
+	clusterExtension.Spec.Source.Version = "1.0.1"
 	require.NoError(t, c.Update(context.Background(), clusterExtension))
 	t.Log("By eventually reporting a successful resolution and bundle path")
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {

@@ -64,9 +64,11 @@ func TestVariableSource(t *testing.T) {
 	clusterExtension := ocv1alpha1.ClusterExtension{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterExtensionName},
 		Spec: ocv1alpha1.ClusterExtensionSpec{
-			PackageName: pkgName,
-			Channel:     "stable",
-			Version:     "2.0.0",
+			Source: ocv1alpha1.ClusterExtensionSource{
+				Name:    pkgName,
+				Channel: "stable",
+				Version: "2.0.0",
+			},
 		},
 	}
 

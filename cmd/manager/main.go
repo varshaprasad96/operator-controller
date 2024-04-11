@@ -74,6 +74,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&cachePath, "cache-path", "/var/cache", "The local directory path used for filesystem based caching")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -84,7 +85,6 @@ func main() {
 	pflag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts), zap.StacktraceLevel(zapcore.DPanicLevel)))
-
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                server.Options{BindAddress: metricsAddr},
@@ -134,6 +134,12 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Extension")
 		os.Exit(1)
 	}
+
+	if err := controllers.SetupWithManager(mgr, mgr.GetCache(), "operator-controller-system",
+		controllers.WithResolver(controllers.ClusterExtensionResolver),
+		controllers.WithUnpacker(controllers.NewImageUnpackerForClusterExtension(mgr.GetClient(), nil, "", ""))); err != nil {
+
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -150,4 +156,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// getPodNamespace checks whether the controller is running in a Pod vs.
+// being run locally by inspecting the namespace file that gets mounted
+// automatically for Pods at runtime. If that file doesn't exist, then
+// return the @defaultNamespace namespace parameter.
+func getPodNamespace(defaultNamespace string) string {
+	namespace, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return defaultNamespace
+	}
+	return string(namespace)
 }

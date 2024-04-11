@@ -20,9 +20,9 @@ func MakeRequiredPackageVariables(allBundles []*catalogmetadata.Bundle, clusterE
 	result := make([]*olmvariables.RequiredPackageVariable, 0, len(clusterExtensions))
 
 	for _, clusterExtension := range clusterExtensions {
-		packageName := clusterExtension.Spec.PackageName
-		channelName := clusterExtension.Spec.Channel
-		versionRange := clusterExtension.Spec.Version
+		packageName := clusterExtension.Spec.Source.Name
+		channelName := clusterExtension.Spec.Source.Channel
+		versionRange := clusterExtension.Spec.Source.Version
 
 		predicates := []catalogfilter.Predicate[catalogmetadata.Bundle]{
 			catalogfilter.WithPackageName(packageName),

@@ -20,8 +20,10 @@ func fakeClusterExtension(name, packageName string, upgradeConstraintPolicy ocv1
 			UID: uuid.NewUUID(),
 		},
 		Spec: ocv1alpha1.ClusterExtensionSpec{
-			PackageName:             packageName,
-			UpgradeConstraintPolicy: upgradeConstraintPolicy,
+			Source: ocv1alpha1.ClusterExtensionSource{
+				Name:                    packageName,
+				UpgradeConstraintPolicy: upgradeConstraintPolicy,
+			},
 		},
 	}
 }

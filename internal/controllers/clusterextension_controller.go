@@ -142,7 +142,7 @@ func (r *ClusterExtensionReconciler) reconcile(ctx context.Context, ext *ocv1alp
 
 	// lookup the bundle in the solution that corresponds to the
 	// ClusterExtension's desired package name.
-	bundle, err := r.bundleFromSolution(selection, ext.Spec.PackageName)
+	bundle, err := r.bundleFromSolution(selection, ext.Spec.Source.Name)
 	if err != nil {
 		ext.Status.InstalledBundle = nil
 		setInstalledStatusConditionUnknown(&ext.Status.Conditions, "installation has not been attempted as resolution failed", ext.GetGeneration())
@@ -294,7 +294,7 @@ func SetDeprecationStatus(ext *ocv1alpha1.ClusterExtension, bundle *catalogmetad
 	// are a loose deprecation coupling on the bundle. A ClusterExtension installation is only
 	// considered deprecated by a channel deprecation when a deprecated channel is specified via
 	// the spec.channel field.
-	if (!bundle.IsDeprecated() && !bundle.HasDeprecation()) || (!bundle.IsDeprecated() && ext.Spec.Channel == "") {
+	if (!bundle.IsDeprecated() && !bundle.HasDeprecation()) || (!bundle.IsDeprecated() && ext.Spec.Source.Channel == "") {
 		return
 	}
 
@@ -311,7 +311,7 @@ func SetDeprecationStatus(ext *ocv1alpha1.ClusterExtension, bundle *catalogmetad
 				ObservedGeneration: ext.Generation,
 			})
 		case declcfg.SchemaChannel:
-			if ext.Spec.Channel != deprecation.Reference.Name {
+			if ext.Spec.Source.Channel != deprecation.Reference.Name {
 				continue
 			}
 

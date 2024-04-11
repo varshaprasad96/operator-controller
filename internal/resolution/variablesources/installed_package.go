@@ -37,7 +37,7 @@ func MakeInstalledPackageVariables(
 	result := make([]*olmvariables.InstalledPackageVariable, 0, len(clusterExtensions))
 	processed := sets.Set[string]{}
 	for _, clusterExtension := range clusterExtensions {
-		if clusterExtension.Spec.UpgradeConstraintPolicy == ocv1alpha1.UpgradeConstraintPolicyIgnore {
+		if clusterExtension.Spec.Source.UpgradeConstraintPolicy == ocv1alpha1.UpgradeConstraintPolicyIgnore {
 			continue
 		}
 
@@ -62,11 +62,11 @@ func MakeInstalledPackageVariables(
 
 		// find corresponding bundle for the installed content
 		resultSet := catalogfilter.Filter(allBundles, catalogfilter.And(
-			catalogfilter.WithPackageName(clusterExtension.Spec.PackageName),
+			catalogfilter.WithPackageName(clusterExtension.Spec.Source.Name),
 			catalogfilter.WithBundleImage(bundleImage),
 		))
 		if len(resultSet) == 0 {
-			return nil, fmt.Errorf("bundle with image %q for package %q not found in available catalogs but is currently installed via BundleDeployment %q", bundleImage, clusterExtension.Spec.PackageName, bundleDeployment.Name)
+			return nil, fmt.Errorf("bundle with image %q for package %q not found in available catalogs but is currently installed via BundleDeployment %q", bundleImage, clusterExtension.Spec.Source.Name, bundleDeployment.Name)
 		}
 
 		sort.SliceStable(resultSet, func(i, j int) bool {
