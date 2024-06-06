@@ -32,7 +32,7 @@ echo "${namespace}" "${tag}"
 kubectl create configmap -n "${namespace}" --from-file="${bundle_dir}/Dockerfile" operator-controller-e2e-${bundle_name}.root
 
 tgz="${bundle_dir}/manifests.tgz"
-tar czf "${tgz}" -C "${bundle_dir}/" manifests metadata
+gtar czf "${tgz}" -C "${bundle_dir}/" manifests metadata
 kubectl create configmap -n "${namespace}" --from-file="${tgz}" operator-controller-${bundle_name}.manifests
 rm "${tgz}"
 
